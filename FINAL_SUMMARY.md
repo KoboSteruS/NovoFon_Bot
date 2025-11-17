@@ -34,6 +34,7 @@
 - Voice processor для интеграции с Asterisk
 - Audio converter (RTP ↔ ElevenLabs)
 - Поддержка HTTP(S) прокси для ElevenLabs (для регионов с блокировками)
+- Поддержка ElevenLabs Agent ID (конфигурируется через `.env`)
 
 ### Этап 5: FSM логика диалога ✅
 - Finite State Machine с 11 состояниями

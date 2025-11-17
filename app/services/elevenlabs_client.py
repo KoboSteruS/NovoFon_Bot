@@ -65,6 +65,7 @@ class ElevenLabsASRClient:
         self.api_key = api_key or settings.elevenlabs_api_key
         self.ws_url = "wss://api.elevenlabs.io/v1/convai/conversation"
         self.proxy = _build_proxy_config()
+        self.default_agent_id = settings.elevenlabs_agent_id
         
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
         self.is_connected = False
@@ -88,8 +89,8 @@ class ElevenLabsASRClient:
         
         # Build WebSocket URL with auth
         url = f"{self.ws_url}?api_key={self.api_key}"
-        if agent_id:
-            url += f"&agent_id={agent_id}"
+        if agent_id or self.default_agent_id:
+            url += f"&agent_id={agent_id or self.default_agent_id}"
         
         try:
             connect_kwargs = {}

@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     elevenlabs_api_key: str
     elevenlabs_voice_id: str = "21m00Tcm4TlvDq8ikWAM"
     elevenlabs_model: str = "eleven_turbo_v2"
+    elevenlabs_agent_id: Optional[str] = None
     elevenlabs_proxy_url: Optional[str] = None
     elevenlabs_proxy_username: Optional[str] = None
     elevenlabs_proxy_password: Optional[str] = None

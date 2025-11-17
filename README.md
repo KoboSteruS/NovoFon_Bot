@@ -68,6 +68,7 @@ cp .env.example .env
 ELEVENLABS_API_KEY=...
 ELEVENLABS_VOICE_ID=21m00Tcm4TlvDq8ikWAM
 ELEVENLABS_MODEL=eleven_turbo_v2
+ELEVENLABS_AGENT_ID=agent_5701k5f1bymae7ysh9pdwaj0a40h
 
 # Прокси (опционально)
 ELEVENLABS_PROXY_URL=http://proxy.example.com:3128
