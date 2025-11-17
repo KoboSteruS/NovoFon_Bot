@@ -11,13 +11,43 @@ from sqlalchemy import (
     Text, 
     Enum,
     ForeignKey,
-    Float
+    Float,
+    TypeDecorator
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID as PostgresUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 import enum
 
 from app.database import Base
+
+
+class GUID(TypeDecorator):
+    """
+    Platform-independent GUID type.
+    Uses PostgreSQL's UUID type, otherwise uses String(36).
+    """
+    impl = String
+    cache_ok = True
+    
+    def load_dialect_impl(self, dialect):
+        if dialect.name == 'postgresql':
+            return dialect.type_descriptor(PostgresUUID(as_uuid=True))
+        else:
+            return dialect.type_descriptor(String(36))
+    
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return value
+        elif dialect.name == 'postgresql':
+            return str(value) if isinstance(value, uuid.UUID) else value
+        else:
+            return str(value) if isinstance(value, uuid.UUID) else value
+    
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return value
+        else:
+            return uuid.UUID(value) if not isinstance(value, uuid.UUID) else value
 
 
 class CallStatus(str, enum.Enum):
@@ -56,7 +86,7 @@ class Call(Base):
     __tablename__ = "calls"
     
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), 
+        GUID(), 
         primary_key=True, 
         default=uuid.uuid4
     )
@@ -109,12 +139,12 @@ class Message(Base):
     __tablename__ = "messages"
     
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID(),
         primary_key=True,
         default=uuid.uuid4
     )
     call_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID(),
         ForeignKey("calls.id", ondelete="CASCADE"),
         nullable=False,
         index=True
@@ -148,7 +178,7 @@ class CallQueue(Base):
     __tablename__ = "call_queue"
     
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID(),
         primary_key=True,
         default=uuid.uuid4
     )
@@ -181,7 +211,7 @@ class CallQueue(Base):
     
     # Result
     call_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True),
+        GUID(),
         ForeignKey("calls.id", ondelete="SET NULL"),
         nullable=True
     )
