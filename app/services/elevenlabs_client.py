@@ -3,18 +3,49 @@ ElevenLabs client for real-time Speech-to-Text (ASR) and Text-to-Speech (TTS)
 """
 import asyncio
 import json
+from dataclasses import dataclass
+from io import BytesIO
 from typing import Optional, Callable, AsyncIterator
+from urllib.parse import urlparse
+
+import aiohttp
 from loguru import logger
 import websockets
-import aiohttp
-from io import BytesIO
+from websockets.http import BasicAuth as WSBasicAuth
 
 from app.config import settings
+@dataclass
+class ProxyConfig:
+    url: str
+    host: str
+    port: int
+    username: Optional[str] = None
+    password: Optional[str] = None
+
 
 
 class ElevenLabsError(Exception):
     """ElevenLabs API error"""
     pass
+
+
+def _build_proxy_config() -> Optional[ProxyConfig]:
+    proxy_url = settings.elevenlabs_proxy_url
+    if not proxy_url:
+        return None
+    parsed = urlparse(proxy_url)
+    if not parsed.hostname or not parsed.port:
+        logger.warning("Invalid ELEVENLABS_PROXY_URL configuration; proxy ignored")
+        return None
+    username = settings.elevenlabs_proxy_username or parsed.username
+    password = settings.elevenlabs_proxy_password or parsed.password
+    return ProxyConfig(
+        url=proxy_url,
+        host=parsed.hostname,
+        port=parsed.port,
+        username=username,
+        password=password,
+    )
 
 
 class ElevenLabsASRClient:
@@ -33,6 +64,7 @@ class ElevenLabsASRClient:
         """
         self.api_key = api_key or settings.elevenlabs_api_key
         self.ws_url = "wss://api.elevenlabs.io/v1/convai/conversation"
+        self.proxy = _build_proxy_config()
         
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
         self.is_connected = False
@@ -60,10 +92,21 @@ class ElevenLabsASRClient:
             url += f"&agent_id={agent_id}"
         
         try:
+            connect_kwargs = {}
+            if self.proxy:
+                connect_kwargs["http_proxy_host"] = self.proxy.host
+                connect_kwargs["http_proxy_port"] = self.proxy.port
+                if self.proxy.username:
+                    connect_kwargs["http_proxy_auth"] = WSBasicAuth(
+                        self.proxy.username,
+                        self.proxy.password or "",
+                    )
+
             self.websocket = await websockets.connect(
                 url,
                 ping_interval=20,
-                ping_timeout=10
+                ping_timeout=10,
+                **connect_kwargs,
             )
             self.is_connected = True
             logger.info("ASR WebSocket connected")
@@ -158,14 +201,21 @@ class ElevenLabsTTSClient:
         """
         self.api_key = api_key or settings.elevenlabs_api_key
         self.base_url = "https://api.elevenlabs.io/v1"
-        
+        self.proxy = _build_proxy_config()
         self.session: Optional[aiohttp.ClientSession] = None
+        self.proxy_auth: Optional[aiohttp.BasicAuth] = None
+        if self.proxy and self.proxy.username:
+            self.proxy_auth = aiohttp.BasicAuth(
+                self.proxy.username,
+                self.proxy.password or "",
+            )
         
         logger.info("ElevenLabs TTS client initialized")
     
     async def __aenter__(self):
         self.session = aiohttp.ClientSession(
-            headers={'xi-api-key': self.api_key}
+            headers={'xi-api-key': self.api_key},
+            trust_env=True,
         )
         return self
     
@@ -219,8 +269,19 @@ class ElevenLabsTTSClient:
                 headers={'xi-api-key': self.api_key}
             )
         
+        request_kwargs = {}
+        if self.proxy:
+            request_kwargs["proxy"] = self.proxy.url
+            if self.proxy_auth:
+                request_kwargs["proxy_auth"] = self.proxy_auth
+
         try:
-            async with self.session.post(url, json=payload, params=params) as resp:
+            async with self.session.post(
+                url,
+                json=payload,
+                params=params,
+                **request_kwargs,
+            ) as resp:
                 if resp.status == 200:
                     audio_data = await resp.read()
                     logger.info(f"TTS generated: {len(audio_data)} bytes")
@@ -281,8 +342,19 @@ class ElevenLabsTTSClient:
                 headers={'xi-api-key': self.api_key}
             )
         
+        request_kwargs = {}
+        if self.proxy:
+            request_kwargs["proxy"] = self.proxy.url
+            if self.proxy_auth:
+                request_kwargs["proxy_auth"] = self.proxy_auth
+
         try:
-            async with self.session.post(url, json=payload, params=params) as resp:
+            async with self.session.post(
+                url,
+                json=payload,
+                params=params,
+                **request_kwargs,
+            ) as resp:
                 if resp.status == 200:
                     # Stream audio chunks
                     async for chunk in resp.content.iter_chunked(4096):

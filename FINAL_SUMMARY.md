@@ -33,6 +33,7 @@
 - Text-to-Speech (streaming и обычный)
 - Voice processor для интеграции с Asterisk
 - Audio converter (RTP ↔ ElevenLabs)
+- Поддержка HTTP(S) прокси для ElevenLabs (для регионов с блокировками)
 
 ### Этап 5: FSM логика диалога ✅
 - Finite State Machine с 11 состояниями

@@ -61,6 +61,20 @@ cp .env.example .env
 # Отредактировать .env файл и добавить ваши ключи
 ```
 
+Если ElevenLabs недоступен из вашего региона, можно настроить прокси:
+
+```env
+# ElevenLabs
+ELEVENLABS_API_KEY=...
+ELEVENLABS_VOICE_ID=21m00Tcm4TlvDq8ikWAM
+ELEVENLABS_MODEL=eleven_turbo_v2
+
+# Прокси (опционально)
+ELEVENLABS_PROXY_URL=http://proxy.example.com:3128
+ELEVENLABS_PROXY_USERNAME=
+ELEVENLABS_PROXY_PASSWORD=
+```
+
 ### 3. Настройка базы данных
 
 ```bash
