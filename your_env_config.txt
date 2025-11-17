@@ -1,0 +1,38 @@
+# Скопируйте это содержимое в файл .env (в корне проекта)
+
+# Application
+APP_ENV=development
+APP_HOST=0.0.0.0
+APP_PORT=8000
+DEBUG=true
+
+# Database (временно SQLite для быстрого теста)
+DATABASE_URL=sqlite+aiosqlite:///./novofon_bot.db
+
+# NovoFon API
+NOVOFON_API_KEY=oat76h2pnu8wdb0m7j1rw9hriqg2epqiw7h423s9
+NOVOFON_API_URL=https://api.novofon.ru
+NOVOFON_FROM_NUMBER=+79581114585
+
+# ElevenLabs (пока не нужен)
+ELEVENLABS_API_KEY=your_elevenlabs_api_key_here
+ELEVENLABS_VOICE_ID=21m00Tcm4TlvDq8ikWAM
+ELEVENLABS_MODEL=eleven_turbo_v2
+
+# Asterisk ARI (будет на Этапе 3)
+ASTERISK_ARI_URL=http://localhost:8088/ari
+ASTERISK_ARI_USERNAME=asterisk
+ASTERISK_ARI_PASSWORD=asterisk
+ASTERISK_ARI_APP_NAME=novofon_bot
+
+# Redis (будет на Этапе 6)
+REDIS_URL=redis://localhost:6379/0
+
+# Celery (будет на Этапе 6)
+CELERY_BROKER_URL=redis://localhost:6379/1
+CELERY_RESULT_BACKEND=redis://localhost:6379/2
+
+# Logging
+LOG_LEVEL=INFO
+LOG_FILE=logs/app.log
+

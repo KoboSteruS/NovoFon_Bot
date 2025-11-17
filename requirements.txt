@@ -1,0 +1,45 @@
+# Core Framework
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# Database (async PostgreSQL + SQLite for testing)
+asyncpg==0.29.0
+aiosqlite==0.19.0
+sqlalchemy[asyncio]==2.0.25
+alembic==1.13.1
+
+# HTTP Client (updated for Python 3.13 compatibility)
+httpx==0.27.0
+aiohttp==3.9.5
+
+# Asterisk ARI (будет добавлено на Этапе 3)
+# ari==0.1.3  # Пока не нужен
+websockets==12.0
+
+# Audio Processing (будет нужно на Этапе 4)
+# numpy==1.26.3
+# scipy==1.11.4
+# pydub==0.25.1
+# soundfile==0.12.1
+
+# ElevenLabs (будет добавлено на Этапе 4)
+# elevenlabs==0.2.27
+
+# Redis (для Celery и кеша) - будет нужно на Этапе 6
+# redis==5.0.1
+# celery==5.3.4
+
+# Utilities
+python-dotenv==1.0.0
+python-multipart==0.0.6
+loguru==0.7.2
+aiocron==1.8
+
+# Development
+pytest==7.4.4
+pytest-asyncio==0.23.3
+black==23.12.1
+ruff==0.1.11
+
