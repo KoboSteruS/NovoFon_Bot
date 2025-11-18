@@ -229,13 +229,18 @@ class AsteriskCallHandler:
         """
         logger.info(f"Initiating outbound call to {phone_number} for call {call_id}")
         
-        # Format endpoint for NovoFon SIP trunk
-        # Example: PJSIP/79991234567@novofon
-        endpoint = f"PJSIP/{phone_number.lstrip('+')}@novofon"
+        # Format endpoint using dialplan context 'outgoing'
+        # The dialplan will handle Dial(PJSIP/${EXTEN}@novofon)
+        # Remove + and any spaces from phone number
+        clean_phone = phone_number.lstrip('+').replace(' ', '').replace('-', '').replace('(', '').replace(')', '')
+        endpoint = f"Local/{clean_phone}@outgoing"
+        
+        logger.debug(f"Using endpoint: {endpoint} for phone {phone_number}")
         
         try:
             channel = await self.ari.originate_call(
                 endpoint=endpoint,
+                caller_id=phone_number,  # Set caller ID
                 variables={
                     'CALL_ID': str(call_id)
                 }
