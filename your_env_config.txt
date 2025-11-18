@@ -10,9 +10,9 @@ DEBUG=true
 DATABASE_URL=sqlite+aiosqlite:///./novofon_bot.db
 
 # NovoFon API
-NOVOFON_API_KEY=oat76h2pnu8wdb0m7j1rw9hriqg2epqiw7h423s9
+NOVOFON_API_KEY=8sbsqnrbz3jx6k34lzelyjgn40v79reiaos4z3kr
 NOVOFON_API_URL=https://api.novofon.ru
-NOVOFON_FROM_NUMBER=+79581114585
+NOVOFON_FROM_NUMBER=+79675558164
 
 # ElevenLabs (пока не нужен)
 ELEVENLABS_API_KEY=sk_010594d480fd16eca15518d34c5d269733b3e418cb60dd3c
