@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 import aiohttp
 from loguru import logger
 import websockets
-from websockets.http import BasicAuth as WSBasicAuth
+# from websockets.http import BasicAuth as WSBasicAuth  # Removed in websockets 11.0+
 
 from app.config import settings
 @dataclass
@@ -97,10 +97,11 @@ class ElevenLabsASRClient:
             if self.proxy:
                 connect_kwargs["http_proxy_host"] = self.proxy.host
                 connect_kwargs["http_proxy_port"] = self.proxy.port
+                # Proxy auth через кортеж (websockets 11.0+)
                 if self.proxy.username:
-                    connect_kwargs["http_proxy_auth"] = WSBasicAuth(
+                    connect_kwargs["http_proxy_auth"] = (
                         self.proxy.username,
-                        self.proxy.password or "",
+                        self.proxy.password or ""
                     )
 
             self.websocket = await websockets.connect(
