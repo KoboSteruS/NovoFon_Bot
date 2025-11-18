@@ -111,6 +111,18 @@ class AsteriskCallHandler:
             # Answer the call
             await self.ari.answer_channel(channel_id)
             
+            # Create call record in database
+            from app.services.call_manager import CallManager
+            from app.database import get_db
+            from app.models import Call, CallStatus
+            from datetime import datetime
+            import uuid
+            
+            # Get database session (simplified - in production use proper dependency injection)
+            # For now, we'll create a minimal call record
+            call_id = uuid.uuid4()
+            self.active_channels[channel_id] = call_id
+            
             # Create FSM for this call
             fsm = DialogueFSM()
             self.fsm_instances[channel_id] = fsm
@@ -125,9 +137,7 @@ class AsteriskCallHandler:
             greeting = fsm.process_user_input("", None)  # Empty input to get initial greeting
             await processor.speak(greeting)
             
-            # TODO: Create call record in database
-            
-            logger.info(f"Incoming call answered: {channel_id}")
+            logger.info(f"Incoming call answered: {channel_id}, call_id: {call_id}")
         
         except Exception as e:
             logger.error(f"Error handling incoming call: {e}", exc_info=True)

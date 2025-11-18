@@ -122,12 +122,53 @@ echo ""
 # ШАГ 7: Настройка PostgreSQL
 # ==========================================
 info "Шаг 7: Настройка PostgreSQL..."
+
+# Проверяем и создаём кластер PostgreSQL, если его нет
+if [ ! -d "/var/lib/postgresql/14/main" ]; then
+    warn "Кластер PostgreSQL не найден. Создаём кластер..."
+    # Устанавливаем локаль для PostgreSQL
+    export LC_ALL=C
+    export LANG=C
+    # Создаём кластер с локалью C (безопасная опция)
+    sudo -u postgres pg_createcluster 14 main --locale=C --start
+    sleep 2
+fi
+
+# Проверяем, запущен ли PostgreSQL
+if ! systemctl is-active --quiet postgresql; then
+    info "Запускаем PostgreSQL..."
+    systemctl start postgresql
+    systemctl enable postgresql
+    sleep 2
+fi
+
+# Проверяем подключение
+if ! sudo -u postgres psql -c "SELECT 1;" > /dev/null 2>&1; then
+    error "Не удалось подключиться к PostgreSQL. Проверь логи: journalctl -u postgresql"
+    exit 1
+fi
+
 read -sp "Введите пароль для пользователя БД $DB_USER: " DB_PASSWORD
 echo ""
 
+# Создаём БД и пользователя
 sudo -u postgres psql <<EOF
-CREATE DATABASE $DB_NAME;
-CREATE USER $DB_USER WITH PASSWORD '$DB_PASSWORD';
+-- Создаём пользователя, если его нет
+DO \$\$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_user WHERE usename = '$DB_USER') THEN
+        CREATE USER $DB_USER WITH PASSWORD '$DB_PASSWORD';
+    ELSE
+        ALTER USER $DB_USER WITH PASSWORD '$DB_PASSWORD';
+    END IF;
+END
+\$\$;
+
+-- Создаём БД, если её нет
+SELECT 'CREATE DATABASE $DB_NAME'
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '$DB_NAME')\gexec
+
+-- Выдаём права
 GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;
 \q
 EOF

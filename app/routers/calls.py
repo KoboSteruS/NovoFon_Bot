@@ -18,6 +18,8 @@ from app.schemas import (
 )
 from app.services.novofon import get_novofon_client, NovoFonClient, NovoFonAPIError
 from app.services.call_manager import CallManager
+from app.services.asterisk_call_handler import get_call_handler
+from app.services.asterisk_ari import get_ari_client
 from app.models import CallStatus
 
 
@@ -29,7 +31,16 @@ def get_call_manager(
     novofon_client: NovoFonClient = Depends(get_novofon_client)
 ) -> CallManager:
     """Dependency for getting call manager"""
-    return CallManager(db, novofon_client)
+    # Try to get Asterisk handler if available
+    asterisk_handler = None
+    try:
+        ari_client = get_ari_client()
+        if ari_client and ari_client._running:
+            asterisk_handler = get_call_handler(ari_client)
+    except Exception as e:
+        logger.debug(f"Asterisk handler not available: {e}")
+    
+    return CallManager(db, novofon_client, asterisk_handler)
 
 
 @router.post("/initiate", response_model=CallResponse, status_code=201)

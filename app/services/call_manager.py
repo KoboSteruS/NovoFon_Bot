@@ -10,6 +10,7 @@ from loguru import logger
 
 from app.models import Call, CallStatus, Message, MessageRole
 from app.services.novofon import NovoFonClient, NovoFonAPIError
+from app.services.asterisk_call_handler import get_call_handler, AsteriskCallHandler
 
 
 class CallManager:
@@ -17,16 +18,23 @@ class CallManager:
     Manages call lifecycle: creation, tracking, completion
     """
     
-    def __init__(self, db: AsyncSession, novofon_client: NovoFonClient):
+    def __init__(
+        self, 
+        db: AsyncSession, 
+        novofon_client: Optional[NovoFonClient] = None,
+        asterisk_handler: Optional[AsteriskCallHandler] = None
+    ):
         """
         Initialize call manager
         
         Args:
             db: Database session
-            novofon_client: NovoFon API client
+            novofon_client: NovoFon API client (optional, for legacy support)
+            asterisk_handler: Asterisk call handler (for SIP calls)
         """
         self.db = db
         self.novofon = novofon_client
+        self.asterisk_handler = asterisk_handler
     
     async def initiate_call(
         self,
@@ -60,19 +68,35 @@ class CallManager:
         logger.info(f"Created call record {call.id} for {phone}")
         
         try:
-            # Initiate call via NovoFon
-            result = await self.novofon.initiate_call(
-                to_number=phone,
-                custom_id=str(call.id)
-            )
+            # Use Asterisk for outbound calls (preferred method)
+            if self.asterisk_handler:
+                channel_id = await self.asterisk_handler.initiate_call(
+                    phone_number=phone,
+                    call_id=call.id
+                )
+                call.asterisk_channel_id = channel_id
+                call.status = CallStatus.RINGING
+                
+                await self.db.commit()
+                
+                logger.info(f"Call {call.id} initiated via Asterisk: {channel_id}")
             
-            # Update call with NovoFon ID
-            call.novofon_call_id = result.get("call_id")
-            call.status = CallStatus.RINGING
+            # Fallback to NovoFon API (legacy, if Asterisk not available)
+            elif self.novofon:
+                result = await self.novofon.initiate_call(
+                    to_number=phone,
+                    custom_id=str(call.id)
+                )
+                
+                call.novofon_call_id = result.get("call_id")
+                call.status = CallStatus.RINGING
+                
+                await self.db.commit()
+                
+                logger.info(f"Call {call.id} initiated via NovoFon: {call.novofon_call_id}")
             
-            await self.db.commit()
-            
-            logger.info(f"Call {call.id} initiated via NovoFon: {call.novofon_call_id}")
+            else:
+                raise ValueError("Neither Asterisk handler nor NovoFon client available")
             
             # Create initial system message
             await self.add_message(
@@ -83,7 +107,7 @@ class CallManager:
             
             return call
         
-        except NovoFonAPIError as e:
+        except Exception as e:
             logger.error(f"Failed to initiate call {call.id}: {e}")
             
             # Update call status to failed
@@ -264,8 +288,15 @@ class CallManager:
         if not call:
             return None
         
-        # Hangup via NovoFon if we have call ID
-        if call.novofon_call_id:
+        # Hangup via Asterisk if we have channel ID
+        if call.asterisk_channel_id and self.asterisk_handler:
+            try:
+                await self.asterisk_handler.hangup_call(call.asterisk_channel_id)
+            except Exception as e:
+                logger.error(f"Failed to hangup call via Asterisk: {e}")
+        
+        # Fallback to NovoFon API
+        elif call.novofon_call_id and self.novofon:
             try:
                 await self.novofon.hangup_call(call.novofon_call_id)
             except NovoFonAPIError as e:
