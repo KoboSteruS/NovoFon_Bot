@@ -6,7 +6,7 @@ from typing import Dict, Optional
 from loguru import logger
 
 from app.services.asterisk_ari import AsteriskARIClient
-from app.services.call_manager import CallManager
+# from app.services.call_manager import CallManager  # Removed to avoid circular import
 from app.services.voice_processor import get_voice_manager, VoiceProcessor
 from app.services.dialogue_fsm import DialogueFSM, DialogueState
 from app.models import CallStatus, MessageRole
@@ -112,13 +112,7 @@ class AsteriskCallHandler:
             await self.ari.answer_channel(channel_id)
             
             # Create call record in database
-            from app.services.call_manager import CallManager
-            from app.database import get_db
-            from app.models import Call, CallStatus
-            from datetime import datetime
-            import uuid
-            
-            # Get database session (simplified - in production use proper dependency injection)
+            # Note: CallManager is imported lazily to avoid circular import
             # For now, we'll create a minimal call record
             call_id = uuid.uuid4()
             self.active_channels[channel_id] = call_id
