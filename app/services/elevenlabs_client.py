@@ -120,25 +120,27 @@ class ElevenLabsASRClient:
             
             # Используем aiohttp для WebSocket подключения через прокси
             # aiohttp лучше поддерживает прокси, чем websockets
-            session_kwargs = {}
+            ws_connect_kwargs = {
+                "heartbeat": 20,  # ping каждые 20 секунд
+                "timeout": aiohttp.ClientTimeout(total=30)
+            }
             
             if self.proxy:
                 logger.info(f"Using proxy for ElevenLabs WebSocket: {self.proxy.host}:{self.proxy.port}")
                 # Формируем URI прокси с авторизацией
                 proxy_uri = f"http://{self.proxy.username}:{self.proxy.password}@{self.proxy.host}:{self.proxy.port}"
-                session_kwargs["proxy"] = proxy_uri
+                ws_connect_kwargs["proxy"] = proxy_uri
                 logger.info(f"Proxy authentication configured for user: {self.proxy.username}")
             else:
                 logger.info("No proxy configured for ElevenLabs WebSocket")
             
-            # Создаем aiohttp сессию для WebSocket
-            self.aiohttp_session = aiohttp.ClientSession(**session_kwargs)
+            # Создаем aiohttp сессию для WebSocket (без прокси в конструкторе)
+            self.aiohttp_session = aiohttp.ClientSession()
             
-            # Подключаемся через aiohttp WebSocket
+            # Подключаемся через aiohttp WebSocket с прокси (если настроен)
             self.aiohttp_ws = await self.aiohttp_session.ws_connect(
                 url,
-                heartbeat=20,  # ping каждые 20 секунд
-                timeout=aiohttp.ClientTimeout(total=30)
+                **ws_connect_kwargs
             )
             
             # Создаем обертку для совместимости с websockets API
