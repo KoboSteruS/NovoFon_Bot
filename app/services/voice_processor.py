@@ -392,7 +392,8 @@ class VoiceProcessorManager:
         self,
         channel_id: str,
         on_transcript: Optional[Callable] = None,
-        on_final_transcript: Optional[Callable] = None
+        on_final_transcript: Optional[Callable] = None,
+        ari_client = None
     ) -> VoiceProcessor:
         """
         Create and start a voice processor for a channel
@@ -401,6 +402,7 @@ class VoiceProcessorManager:
             channel_id: Asterisk channel ID
             on_transcript: Callback for partial transcripts
             on_final_transcript: Callback for final transcripts
+            ari_client: Asterisk ARI client for sending audio
         
         Returns:
             VoiceProcessor instance
