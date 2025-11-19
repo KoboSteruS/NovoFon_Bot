@@ -71,14 +71,26 @@ cat >> /etc/asterisk/extensions.conf <<EOF
 exten => _X.,1,NoOp(=== Outgoing call to \${EXTEN} via NovoFon ===)
  same => n,Set(CALLERID(num)=$CALLER_ID)
  same => n,Set(CALLERID(name)=NovoFon Bot)
- same => n,NoOp(Calling \${EXTEN} via PJSIP/novofon)
- ; Добавляем + если его нет в номере
+ same => n,NoOp(Original number: \${EXTEN})
+ ; Форматируем номер для NovoFon: добавляем + если его нет
  same => n,Set(OUTBOUND_NUM=\${EXTEN})
  same => n,GotoIf(\$["\${OUTBOUND_NUM:0:1}" = "+"]?dial)
  same => n,Set(OUTBOUND_NUM=+\${OUTBOUND_NUM})
- same => n(dial),NoOp(Formatted number: \${OUTBOUND_NUM})
+ same => n(dial),NoOp(Formatted number for NovoFon: \${OUTBOUND_NUM})
+ same => n,NoOp(Calling via PJSIP/\${OUTBOUND_NUM}@novofon)
+ ; Пробуем сначала с +, если не работает - без +
  same => n,Dial(PJSIP/\${OUTBOUND_NUM}@novofon,60,Tt)
- same => n,NoOp(Dial ended with status: \${DIALSTATUS})
+ same => n,NoOp(Dial ended with status: \${DIALSTATUS}, cause: \${HANGUPCAUSE})
+ ; Если не получилось с +, пробуем без +
+ same => n,GotoIf(\$["\${DIALSTATUS}" = "NOANSWER"]?try_without_plus)
+ same => n,GotoIf(\$["\${DIALSTATUS}" = "CHANUNAVAIL"]?try_without_plus)
+ same => n,GotoIf(\$["\${DIALSTATUS}" = "CONGESTION"]?try_without_plus)
+ same => n,Hangup()
+ same => n(try_without_plus),NoOp(Trying without + prefix...)
+ same => n,Set(OUTBOUND_NUM=\${EXTEN})
+ same => n,NoOp(Calling via PJSIP/\${OUTBOUND_NUM}@novofon (no +))
+ same => n,Dial(PJSIP/\${OUTBOUND_NUM}@novofon,60,Tt)
+ same => n,NoOp(Dial ended with status: \${DIALSTATUS}, cause: \${HANGUPCAUSE})
  same => n,Hangup()
 
 EOF
