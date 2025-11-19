@@ -85,6 +85,8 @@ class ElevenLabsASRClient:
         self.default_agent_id = settings.elevenlabs_agent_id
         
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
+        self.aiohttp_session: Optional[aiohttp.ClientSession] = None
+        self.aiohttp_ws: Optional[aiohttp.ClientWebSocketResponse] = None
         self.is_connected = False
         
         # Callbacks
@@ -113,42 +115,36 @@ class ElevenLabsASRClient:
             url += f"&agent_id={agent_id or self.default_agent_id}"
         
         try:
-            # Настройка прокси для WebSocket подключения
-            connect_kwargs = {
-                "ping_interval": 20,
-                "ping_timeout": 10,
-            }
-            
-            if self.proxy:
-                logger.info(f"Using proxy for ElevenLabs WebSocket: {self.proxy.host}:{self.proxy.port}")
-                
-                # Proxy-Authorization header (Basic Auth)
-                auth_string = f"{self.proxy.username}:{self.proxy.password}"
-                auth_token = base64.b64encode(auth_string.encode()).decode()
-                proxy_headers = {
-                    "Proxy-Authorization": f"Basic {auth_token}"
-                }
-                
-                # Добавляем прокси заголовки в параметры подключения
-                # websockets.connect не поддерживает open_connection_args
-                # Используем только extra_headers для авторизации прокси
-                connect_kwargs["extra_headers"] = proxy_headers
-                
-                logger.info(f"Proxy authentication configured for user: {self.proxy.username}")
-                logger.warning("⚠️  WebSocket proxy через extra_headers может не работать. Если подключение не удается, используйте другой метод.")
-            else:
-                logger.info("No proxy configured for ElevenLabs WebSocket")
-
             logger.info(f"Connecting to ElevenLabs WebSocket: {self.ws_url}")
             logger.info(f"Agent ID: {agent_id or self.default_agent_id}")
             
-            # Подключение с прокси (если настроен)
-            self.websocket = await websockets.connect(
+            # Используем aiohttp для WebSocket подключения через прокси
+            # aiohttp лучше поддерживает прокси, чем websockets
+            session_kwargs = {}
+            
+            if self.proxy:
+                logger.info(f"Using proxy for ElevenLabs WebSocket: {self.proxy.host}:{self.proxy.port}")
+                # Формируем URI прокси с авторизацией
+                proxy_uri = f"http://{self.proxy.username}:{self.proxy.password}@{self.proxy.host}:{self.proxy.port}"
+                session_kwargs["proxy"] = proxy_uri
+                logger.info(f"Proxy authentication configured for user: {self.proxy.username}")
+            else:
+                logger.info("No proxy configured for ElevenLabs WebSocket")
+            
+            # Создаем aiohttp сессию для WebSocket
+            self.aiohttp_session = aiohttp.ClientSession(**session_kwargs)
+            
+            # Подключаемся через aiohttp WebSocket
+            self.aiohttp_ws = await self.aiohttp_session.ws_connect(
                 url,
-                **connect_kwargs
+                heartbeat=20,  # ping каждые 20 секунд
+                timeout=aiohttp.ClientTimeout(total=30)
             )
+            
+            # Создаем обертку для совместимости с websockets API
+            # Но для получения сообщений будем использовать aiohttp_ws напрямую
             self.is_connected = True
-            logger.info("✅ ElevenLabs ASR WebSocket connected successfully")
+            logger.info("✅ ElevenLabs ASR WebSocket connected successfully via aiohttp")
             
             # Start listening for transcripts
             asyncio.create_task(self._receive_loop())
@@ -163,20 +159,47 @@ class ElevenLabsASRClient:
     
     async def disconnect(self):
         """Disconnect from WebSocket"""
+        self.is_connected = False
+        
+        if self.aiohttp_ws:
+            await self.aiohttp_ws.close()
+            self.aiohttp_ws = None
+        
+        if self.aiohttp_session:
+            await self.aiohttp_session.close()
+            self.aiohttp_session = None
+        
         if self.websocket:
             await self.websocket.close()
-            self.is_connected = False
-            logger.info("ASR WebSocket disconnected")
+            self.websocket = None
+        
+        logger.info("ASR WebSocket disconnected")
     
     async def _receive_loop(self):
         """Receive transcripts from WebSocket"""
         try:
-            async for message in self.websocket:
-                try:
-                    data = json.loads(message)
-                    await self._handle_message(data)
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to decode ASR message: {e}")
+            # Используем aiohttp WebSocket если доступен, иначе websockets
+            if self.aiohttp_ws:
+                async for msg in self.aiohttp_ws:
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        try:
+                            data = json.loads(msg.data)
+                            await self._handle_message(data)
+                        except json.JSONDecodeError as e:
+                            logger.error(f"Failed to decode ASR message: {e}")
+                    elif msg.type == aiohttp.WSMsgType.ERROR:
+                        logger.error(f"WebSocket error: {self.aiohttp_ws.exception()}")
+                        break
+                    elif msg.type == aiohttp.WSMsgType.CLOSE:
+                        logger.info("ASR WebSocket connection closed")
+                        break
+            elif self.websocket:
+                async for message in self.websocket:
+                    try:
+                        data = json.loads(message)
+                        await self._handle_message(data)
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to decode ASR message: {e}")
         except websockets.exceptions.ConnectionClosed:
             logger.info("ASR WebSocket connection closed")
             self.is_connected = False
@@ -211,12 +234,18 @@ class ElevenLabsASRClient:
         Args:
             audio_chunk: Audio data (PCM 16-bit, 8kHz or 16kHz mono)
         """
-        if not self.is_connected or not self.websocket:
+        if not self.is_connected:
             raise ElevenLabsError("ASR not connected")
         
+        if not self.aiohttp_ws and not self.websocket:
+            raise ElevenLabsError("WebSocket not available")
+        
         try:
-            # Send binary audio data
-            await self.websocket.send(audio_chunk)
+            # Используем aiohttp WebSocket если доступен, иначе websockets
+            if self.aiohttp_ws:
+                await self.aiohttp_ws.send_bytes(audio_chunk)
+            elif self.websocket:
+                await self.websocket.send(audio_chunk)
         except Exception as e:
             logger.error(f"Failed to send audio to ASR: {e}")
             raise ElevenLabsError(f"Send audio failed: {e}")
