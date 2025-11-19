@@ -122,9 +122,6 @@ class ElevenLabsASRClient:
             if self.proxy:
                 logger.info(f"Using proxy for ElevenLabs WebSocket: {self.proxy.host}:{self.proxy.port}")
                 
-                # Формируем URI прокси с авторизацией
-                proxy_uri = f"http://{self.proxy.username}:{self.proxy.password}@{self.proxy.host}:{self.proxy.port}"
-                
                 # Proxy-Authorization header (Basic Auth)
                 auth_string = f"{self.proxy.username}:{self.proxy.password}"
                 auth_token = base64.b64encode(auth_string.encode()).decode()
@@ -132,11 +129,13 @@ class ElevenLabsASRClient:
                     "Proxy-Authorization": f"Basic {auth_token}"
                 }
                 
-                # Добавляем прокси в параметры подключения
+                # Добавляем прокси заголовки в параметры подключения
+                # websockets.connect не поддерживает open_connection_args
+                # Используем только extra_headers для авторизации прокси
                 connect_kwargs["extra_headers"] = proxy_headers
-                connect_kwargs["open_connection_args"] = {"proxy": proxy_uri}
                 
                 logger.info(f"Proxy authentication configured for user: {self.proxy.username}")
+                logger.warning("⚠️  WebSocket proxy через extra_headers может не работать. Если подключение не удается, используйте другой метод.")
             else:
                 logger.info("No proxy configured for ElevenLabs WebSocket")
 

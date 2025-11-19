@@ -17,9 +17,10 @@ from app.config import settings
 Base = declarative_base()
 
 # Create async engine
+# echo=False to disable SQLAlchemy query logging
 engine: AsyncEngine = create_async_engine(
     settings.database_url,
-    echo=settings.debug,
+    echo=False,  # Отключено логирование SQL запросов
     poolclass=NullPool if settings.is_development else None,
     future=True
 )

@@ -2,6 +2,7 @@
 Main FastAPI application
 """
 import os
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -21,6 +22,11 @@ logger.add(
     level=settings.log_level,
     format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {name}:{function}:{line} | {message}"
 )
+
+# Отключить логи SQLAlchemy (они засоряют вывод)
+logging.getLogger('sqlalchemy.engine').setLevel(logging.ERROR)
+logging.getLogger('sqlalchemy.pool').setLevel(logging.ERROR)
+logging.getLogger('sqlalchemy.dialects').setLevel(logging.ERROR)
 
 
 @asynccontextmanager
