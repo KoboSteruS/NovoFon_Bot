@@ -499,7 +499,23 @@ class AudioConverter:
             μ-law encoded audio
         """
         import audioop
-        return audioop.lin2ulaw(pcm_data, 2)
+        
+        if not pcm_data:
+            raise ValueError("Empty PCM data")
+        
+        # Убеждаемся, что размер кратен 2 байтам (16-bit)
+        if len(pcm_data) % 2 != 0:
+            logger.warning(f"PCM data size ({len(pcm_data)} bytes) not even, trimming last byte")
+            pcm_data = pcm_data[:-1]
+        
+        if len(pcm_data) < 2:
+            raise ValueError(f"PCM data too short: {len(pcm_data)} bytes (minimum: 2 bytes)")
+        
+        try:
+            return audioop.lin2ulaw(pcm_data, 2)
+        except Exception as e:
+            logger.error(f"PCM16 to PCMU conversion failed: {e}, data_size={len(pcm_data)}")
+            raise
     
     @staticmethod
     def resample(audio_data: bytes, from_rate: int, to_rate: int, channels: int = 1) -> bytes:
@@ -517,17 +533,37 @@ class AudioConverter:
         """
         import audioop
         
+        if not audio_data:
+            raise ValueError("Empty audio data")
+        
+        # Убеждаемся, что размер кратен размеру сэмпла (2 байта для 16-bit)
+        sample_width = 2  # 16-bit = 2 bytes
+        frame_size = sample_width * channels
+        
+        if len(audio_data) % frame_size != 0:
+            # Обрезаем до кратного размера
+            remainder = len(audio_data) % frame_size
+            logger.warning(f"Audio size ({len(audio_data)} bytes) not multiple of frame size ({frame_size} bytes), trimming {remainder} bytes")
+            audio_data = audio_data[:-remainder]
+        
+        if len(audio_data) < frame_size:
+            raise ValueError(f"Audio too short: {len(audio_data)} bytes (minimum: {frame_size} bytes)")
+        
         # Calculate rate conversion
         # audioop.ratecv(fragment, width, nchannels, inrate, outrate, state)
-        resampled, _ = audioop.ratecv(
-            audio_data,
-            2,  # 16-bit = 2 bytes
-            channels,
-            from_rate,
-            to_rate,
-            None
-        )
-        return resampled
+        try:
+            resampled, _ = audioop.ratecv(
+                audio_data,
+                sample_width,
+                channels,
+                from_rate,
+                to_rate,
+                None
+            )
+            return resampled
+        except Exception as e:
+            logger.error(f"Resampling failed: {e}, audio_size={len(audio_data)}, from_rate={from_rate}, to_rate={to_rate}, channels={channels}")
+            raise
 
 
 # Global clients

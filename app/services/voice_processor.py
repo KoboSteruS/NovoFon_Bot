@@ -198,60 +198,60 @@ class VoiceProcessor:
         logger.info(f"Streaming: {streaming}")
         
         try:
-            # Пробуем запросить pcm_8000 напрямую от ElevenLabs
-            # Если не поддерживается - используем pcm_16000 и ресемплим
-            output_format = "pcm_8000"  # Попробуем запросить 8kHz напрямую
-            use_8khz_direct = True
+            # Используем pcm_16000 от ElevenLabs (гарантированно поддерживается)
+            # Затем ресемплим в 8kHz и конвертируем в PCMU
+            output_format = "pcm_16000"
             
             if streaming:
-                # Streaming TTS - send chunks as they arrive
-                try:
-                    audio_chunks = []
-                    async for audio_chunk in self.tts_client.text_to_speech_stream(
-                        text,
-                        output_format=output_format
-                    ):
-                        audio_chunks.append(audio_chunk)
-                    
-                    # Объединяем все чанки
-                    if audio_chunks:
-                        full_audio = b''.join(audio_chunks)
-                    else:
-                        raise ValueError("No audio chunks received")
-                        
-                except Exception as e:
-                    # Если pcm_8000 не поддерживается - используем pcm_16000
-                    logger.warning(f"Failed to get pcm_8000, falling back to pcm_16000: {e}")
-                    output_format = "pcm_16000"
-                    use_8khz_direct = False
-                    
-                    audio_chunks = []
-                    async for audio_chunk in self.tts_client.text_to_speech_stream(
-                        text,
-                        output_format=output_format
-                    ):
-                        audio_chunks.append(audio_chunk)
-                    
-                    full_audio = b''.join(audio_chunks) if audio_chunks else b''
+                # Streaming TTS - накапливаем чанки и обрабатываем
+                audio_buffer = bytearray()
                 
-                if full_audio:
-                    # Конвертируем в PCMU
-                    if use_8khz_direct and output_format == "pcm_8000":
-                        # Прямо в PCMU (8kHz PCM16 -> PCMU)
-                        # Убеждаемся, что размер кратен 2 байтам (16-bit)
-                        if len(full_audio) % 2 != 0:
-                            full_audio = full_audio[:-1]
-                        pcmu_data = AudioConverter.pcm16_to_pcmu(full_audio)
-                    else:
-                        # Ресемплим с 16kHz на 8kHz
-                        # Убеждаемся, что размер кратен 2 байтам (16-bit)
-                        if len(full_audio) % 2 != 0:
-                            full_audio = full_audio[:-1]
-                        audio_8khz = AudioConverter.resample(full_audio, 16000, 8000)
-                        pcmu_data = AudioConverter.pcm16_to_pcmu(audio_8khz)
+                try:
+                    async for audio_chunk in self.tts_client.text_to_speech_stream(
+                        text,
+                        output_format=output_format
+                    ):
+                        if audio_chunk:
+                            audio_buffer.extend(audio_chunk)
+                            logger.debug(f"Received audio chunk: {len(audio_chunk)} bytes, total: {len(audio_buffer)} bytes")
+                    
+                    if not audio_buffer:
+                        raise ValueError("No audio chunks received")
+                    
+                    # Конвертируем в bytes и обрабатываем
+                    full_audio = bytes(audio_buffer)
+                    logger.info(f"Total audio received: {len(full_audio)} bytes (PCM16, 16kHz)")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to get TTS audio: {e}", exc_info=True)
+                    raise
+                
+                # Обрабатываем аудио: ресемплим 16kHz -> 8kHz, затем в PCMU
+                try:
+                    # Убеждаемся, что размер кратен 2 байтам (16-bit PCM)
+                    if len(full_audio) % 2 != 0:
+                        logger.warning(f"Audio size not even ({len(full_audio)} bytes), trimming last byte")
+                        full_audio = full_audio[:-1]
+                    
+                    if len(full_audio) < 2:
+                        raise ValueError(f"Audio too short: {len(full_audio)} bytes")
+                    
+                    # Ресемплим с 16kHz на 8kHz
+                    logger.info(f"Resampling from 16kHz to 8kHz...")
+                    audio_8khz = AudioConverter.resample(full_audio, 16000, 8000)
+                    logger.info(f"Resampled audio: {len(audio_8khz)} bytes (PCM16, 8kHz)")
+                    
+                    # Конвертируем PCM16 в PCMU (μ-law)
+                    logger.info(f"Converting PCM16 to PCMU...")
+                    pcmu_data = AudioConverter.pcm16_to_pcmu(audio_8khz)
+                    logger.info(f"PCMU audio ready: {len(pcmu_data)} bytes (PCMU, 8kHz)")
                     
                     # Отправляем в Asterisk через ARI
                     await self._send_audio_to_asterisk(pcmu_data)
+                    
+                except Exception as e:
+                    logger.error(f"Error processing audio: {e}", exc_info=True)
+                    raise
             
             else:
                 # Non-streaming TTS - wait for complete audio
@@ -260,33 +260,37 @@ class VoiceProcessor:
                         text,
                         output_format=output_format
                     )
+                    logger.info(f"Total audio received: {len(audio_data)} bytes (PCM16, 16kHz)")
                 except Exception as e:
-                    # Если pcm_8000 не поддерживается - используем pcm_16000
-                    logger.warning(f"Failed to get pcm_8000, falling back to pcm_16000: {e}")
-                    output_format = "pcm_16000"
-                    use_8khz_direct = False
-                    audio_data = await self.tts_client.text_to_speech(
-                        text,
-                        output_format=output_format
-                    )
+                    logger.error(f"Failed to get TTS audio: {e}", exc_info=True)
+                    raise
                 
-                # Конвертируем в PCMU
-                if use_8khz_direct and output_format == "pcm_8000":
-                    # Прямо в PCMU (8kHz PCM16 -> PCMU)
-                    # Убеждаемся, что размер кратен 2 байтам (16-bit)
+                # Обрабатываем аудио: ресемплим 16kHz -> 8kHz, затем в PCMU
+                try:
+                    # Убеждаемся, что размер кратен 2 байтам (16-bit PCM)
                     if len(audio_data) % 2 != 0:
+                        logger.warning(f"Audio size not even ({len(audio_data)} bytes), trimming last byte")
                         audio_data = audio_data[:-1]
-                    pcmu_data = AudioConverter.pcm16_to_pcmu(audio_data)
-                else:
+                    
+                    if len(audio_data) < 2:
+                        raise ValueError(f"Audio too short: {len(audio_data)} bytes")
+                    
                     # Ресемплим с 16kHz на 8kHz
-                    # Убеждаемся, что размер кратен 2 байтам (16-bit)
-                    if len(audio_data) % 2 != 0:
-                        audio_data = audio_data[:-1]
+                    logger.info(f"Resampling from 16kHz to 8kHz...")
                     audio_8khz = AudioConverter.resample(audio_data, 16000, 8000)
+                    logger.info(f"Resampled audio: {len(audio_8khz)} bytes (PCM16, 8kHz)")
+                    
+                    # Конвертируем PCM16 в PCMU (μ-law)
+                    logger.info(f"Converting PCM16 to PCMU...")
                     pcmu_data = AudioConverter.pcm16_to_pcmu(audio_8khz)
-                
-                # Отправляем в Asterisk через ARI
-                await self._send_audio_to_asterisk(pcmu_data)
+                    logger.info(f"PCMU audio ready: {len(pcmu_data)} bytes (PCMU, 8kHz)")
+                    
+                    # Отправляем в Asterisk через ARI
+                    await self._send_audio_to_asterisk(pcmu_data)
+                    
+                except Exception as e:
+                    logger.error(f"Error processing audio: {e}", exc_info=True)
+                    raise
             
             logger.info("✅ Speech sent to Asterisk")
         
