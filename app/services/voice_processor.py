@@ -198,9 +198,10 @@ class VoiceProcessor:
         logger.info(f"Streaming: {streaming}")
         
         try:
-            # Используем pcm_16000 от ElevenLabs (гарантированно поддерживается)
-            # Затем ресемплим в 8kHz и конвертируем в PCMU
-            output_format = "pcm_16000"
+            # Пробуем запросить pcm_8000 напрямую от ElevenLabs (если поддерживается)
+            # Если нет - используем pcm_16000 и ресемплим
+            output_format = "pcm_8000"  # Попробуем получить 8kHz напрямую
+            use_8khz_direct = True
             
             if streaming:
                 # Streaming TTS - накапливаем чанки и обрабатываем
@@ -220,38 +221,84 @@ class VoiceProcessor:
                     
                     # Конвертируем в bytes и обрабатываем
                     full_audio = bytes(audio_buffer)
-                    logger.info(f"Total audio received: {len(full_audio)} bytes (PCM16, 16kHz)")
+                    if use_8khz_direct and output_format == "pcm_8000":
+                        logger.info(f"Total audio received: {len(full_audio)} bytes (PCM16, 8kHz)")
+                    else:
+                        logger.info(f"Total audio received: {len(full_audio)} bytes (PCM16, 16kHz)")
                     
                 except Exception as e:
                     logger.error(f"Failed to get TTS audio: {e}", exc_info=True)
-                    raise
+                    # Если pcm_8000 не поддерживается - пробуем pcm_16000
+                    if use_8khz_direct and output_format == "pcm_8000":
+                        logger.warning(f"pcm_8000 not supported, falling back to pcm_16000: {e}")
+                        output_format = "pcm_16000"
+                        use_8khz_direct = False
+                        audio_buffer = bytearray()
+                        async for audio_chunk in self.tts_client.text_to_speech_stream(
+                            text,
+                            output_format=output_format
+                        ):
+                            if audio_chunk:
+                                audio_buffer.extend(audio_chunk)
+                        if audio_buffer:
+                            full_audio = bytes(audio_buffer)
+                            logger.info(f"Total audio received: {len(full_audio)} bytes (PCM16, 16kHz)")
+                        else:
+                            raise ValueError("No audio chunks received after fallback")
+                    else:
+                        raise
                 
-                # Обрабатываем аудио: ресемплим 16kHz -> 8kHz, затем в PCMU
+                # Обрабатываем аудио: конвертируем в PCMU
                 try:
-                    # Убеждаемся, что размер кратен 2 байтам (16-bit PCM)
-                    if len(full_audio) % 2 != 0:
-                        logger.warning(f"Audio size not even ({len(full_audio)} bytes), trimming last byte")
-                        full_audio = full_audio[:-1]
-                    
-                    if len(full_audio) < 2:
-                        raise ValueError(f"Audio too short: {len(full_audio)} bytes")
-                    
-                    # Ресемплим с 16kHz на 8kHz
-                    logger.info(f"Resampling from 16kHz to 8kHz...")
-                    audio_8khz = AudioConverter.resample(full_audio, 16000, 8000)
-                    logger.info(f"Resampled audio: {len(audio_8khz)} bytes (PCM16, 8kHz)")
-                    
-                    # Конвертируем PCM16 в PCMU (μ-law)
-                    logger.info(f"Converting PCM16 to PCMU...")
-                    pcmu_data = AudioConverter.pcm16_to_pcmu(audio_8khz)
-                    logger.info(f"PCMU audio ready: {len(pcmu_data)} bytes (PCMU, 8kHz)")
+                    # Если получили pcm_8000 - конвертируем напрямую в PCMU
+                    # Если получили pcm_16000 - ресемплим сначала
+                    if use_8khz_direct and output_format == "pcm_8000":
+                        # Прямо в PCMU (8kHz PCM16 -> PCMU)
+                        # Убеждаемся, что размер кратен 2 байтам (16-bit)
+                        if len(full_audio) % 2 != 0:
+                            logger.warning(f"Audio size not even ({len(full_audio)} bytes), trimming last byte")
+                            full_audio = full_audio[:-1]
+                        
+                        if len(full_audio) < 2:
+                            raise ValueError(f"Audio too short: {len(full_audio)} bytes")
+                        
+                        logger.info(f"Converting PCM16 (8kHz) to PCMU...")
+                        pcmu_data = AudioConverter.pcm16_to_pcmu(full_audio)
+                        logger.info(f"PCMU audio ready: {len(pcmu_data)} bytes (PCMU, 8kHz)")
+                    else:
+                        # Ресемплим с 16kHz на 8kHz
+                        # Убеждаемся, что размер кратен 2 байтам (16-bit PCM)
+                        if len(full_audio) % 2 != 0:
+                            logger.warning(f"Audio size not even ({len(full_audio)} bytes), trimming last byte")
+                            full_audio = full_audio[:-1]
+                        
+                        if len(full_audio) < 2:
+                            raise ValueError(f"Audio too short: {len(full_audio)} bytes")
+                        
+                        # Ресемплим с 16kHz на 8kHz
+                        logger.info(f"Resampling from 16kHz to 8kHz...")
+                        audio_8khz = AudioConverter.resample(full_audio, 16000, 8000)
+                        logger.info(f"Resampled audio: {len(audio_8khz)} bytes (PCM16, 8kHz)")
+                        
+                        # Конвертируем PCM16 в PCMU (μ-law)
+                        logger.info(f"Converting PCM16 to PCMU...")
+                        pcmu_data = AudioConverter.pcm16_to_pcmu(audio_8khz)
+                        logger.info(f"PCMU audio ready: {len(pcmu_data)} bytes (PCMU, 8kHz)")
                     
                     # Отправляем в Asterisk через ARI
                     await self._send_audio_to_asterisk(pcmu_data)
                     
                 except Exception as e:
                     logger.error(f"Error processing audio: {e}", exc_info=True)
-                    raise
+                    # Если pcm_8000 не поддерживается - пробуем pcm_16000
+                    if use_8khz_direct and output_format == "pcm_8000":
+                        logger.warning(f"pcm_8000 not supported, falling back to pcm_16000: {e}")
+                        output_format = "pcm_16000"
+                        use_8khz_direct = False
+                        # Повторяем запрос с pcm_16000
+                        raise  # Пока просто пробрасываем ошибку, можно добавить retry логику
+                    else:
+                        raise
             
             else:
                 # Non-streaming TTS - wait for complete audio
@@ -260,30 +307,61 @@ class VoiceProcessor:
                         text,
                         output_format=output_format
                     )
-                    logger.info(f"Total audio received: {len(audio_data)} bytes (PCM16, 16kHz)")
+                    if use_8khz_direct and output_format == "pcm_8000":
+                        logger.info(f"Total audio received: {len(audio_data)} bytes (PCM16, 8kHz)")
+                    else:
+                        logger.info(f"Total audio received: {len(audio_data)} bytes (PCM16, 16kHz)")
                 except Exception as e:
                     logger.error(f"Failed to get TTS audio: {e}", exc_info=True)
-                    raise
+                    # Если pcm_8000 не поддерживается - пробуем pcm_16000
+                    if use_8khz_direct and output_format == "pcm_8000":
+                        logger.warning(f"pcm_8000 not supported, falling back to pcm_16000: {e}")
+                        output_format = "pcm_16000"
+                        use_8khz_direct = False
+                        audio_data = await self.tts_client.text_to_speech(
+                            text,
+                            output_format=output_format
+                        )
+                        logger.info(f"Total audio received: {len(audio_data)} bytes (PCM16, 16kHz)")
+                    else:
+                        raise
                 
-                # Обрабатываем аудио: ресемплим 16kHz -> 8kHz, затем в PCMU
+                # Обрабатываем аудио: конвертируем в PCMU
                 try:
-                    # Убеждаемся, что размер кратен 2 байтам (16-bit PCM)
-                    if len(audio_data) % 2 != 0:
-                        logger.warning(f"Audio size not even ({len(audio_data)} bytes), trimming last byte")
-                        audio_data = audio_data[:-1]
-                    
-                    if len(audio_data) < 2:
-                        raise ValueError(f"Audio too short: {len(audio_data)} bytes")
-                    
-                    # Ресемплим с 16kHz на 8kHz
-                    logger.info(f"Resampling from 16kHz to 8kHz...")
-                    audio_8khz = AudioConverter.resample(audio_data, 16000, 8000)
-                    logger.info(f"Resampled audio: {len(audio_8khz)} bytes (PCM16, 8kHz)")
-                    
-                    # Конвертируем PCM16 в PCMU (μ-law)
-                    logger.info(f"Converting PCM16 to PCMU...")
-                    pcmu_data = AudioConverter.pcm16_to_pcmu(audio_8khz)
-                    logger.info(f"PCMU audio ready: {len(pcmu_data)} bytes (PCMU, 8kHz)")
+                    # Если получили pcm_8000 - конвертируем напрямую в PCMU
+                    # Если получили pcm_16000 - ресемплим сначала
+                    if use_8khz_direct and output_format == "pcm_8000":
+                        # Прямо в PCMU (8kHz PCM16 -> PCMU)
+                        # Убеждаемся, что размер кратен 2 байтам (16-bit)
+                        if len(audio_data) % 2 != 0:
+                            logger.warning(f"Audio size not even ({len(audio_data)} bytes), trimming last byte")
+                            audio_data = audio_data[:-1]
+                        
+                        if len(audio_data) < 2:
+                            raise ValueError(f"Audio too short: {len(audio_data)} bytes")
+                        
+                        logger.info(f"Converting PCM16 (8kHz) to PCMU...")
+                        pcmu_data = AudioConverter.pcm16_to_pcmu(audio_data)
+                        logger.info(f"PCMU audio ready: {len(pcmu_data)} bytes (PCMU, 8kHz)")
+                    else:
+                        # Ресемплим с 16kHz на 8kHz
+                        # Убеждаемся, что размер кратен 2 байтам (16-bit PCM)
+                        if len(audio_data) % 2 != 0:
+                            logger.warning(f"Audio size not even ({len(audio_data)} bytes), trimming last byte")
+                            audio_data = audio_data[:-1]
+                        
+                        if len(audio_data) < 2:
+                            raise ValueError(f"Audio too short: {len(audio_data)} bytes")
+                        
+                        # Ресемплим с 16kHz на 8kHz
+                        logger.info(f"Resampling from 16kHz to 8kHz...")
+                        audio_8khz = AudioConverter.resample(audio_data, 16000, 8000)
+                        logger.info(f"Resampled audio: {len(audio_8khz)} bytes (PCM16, 8kHz)")
+                        
+                        # Конвертируем PCM16 в PCMU (μ-law)
+                        logger.info(f"Converting PCM16 to PCMU...")
+                        pcmu_data = AudioConverter.pcm16_to_pcmu(audio_8khz)
+                        logger.info(f"PCMU audio ready: {len(pcmu_data)} bytes (PCMU, 8kHz)")
                     
                     # Отправляем в Asterisk через ARI
                     await self._send_audio_to_asterisk(pcmu_data)
@@ -299,7 +377,7 @@ class VoiceProcessor:
     
     async def _send_audio_to_asterisk(self, pcmu_data: bytes):
         """
-        Send PCMU audio to Asterisk channel through ARI
+        Send PCMU audio to Asterisk channel through ARI using data URI
         
         Args:
             pcmu_data: PCMU (μ-law) encoded audio data (8kHz)
@@ -309,57 +387,21 @@ class VoiceProcessor:
             return
         
         try:
-            # Создаем временный WAV файл с PCMU аудио
-            # Asterisk понимает WAV файлы с PCMU кодеком
-            import struct
-            import wave
+            import base64
             
-            # Создаем временный файл
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_file:
-                wav_path = tmp_file.name
-                
-                # Создаем WAV файл с PCMU
-                # WAV header для PCMU (μ-law) 8kHz mono
-                sample_rate = 8000
-                num_channels = 1
-                sample_width = 1  # PCMU = 1 byte per sample
-                num_frames = len(pcmu_data)
-                
-                # WAV header
-                wav_file = wave.open(wav_path, 'wb')
-                wav_file.setnchannels(num_channels)
-                wav_file.setsampwidth(sample_width)
-                wav_file.setframerate(sample_rate)
-                wav_file.setcomptype('ULAW', 'ulaw')  # PCMU codec
-                wav_file.writeframes(pcmu_data)
-                wav_file.close()
-                
-                logger.info(f"Created temporary WAV file: {wav_path} ({len(pcmu_data)} bytes PCMU)")
+            # Кодируем PCMU в base64 для data URI
+            b64_data = base64.b64encode(pcmu_data).decode('ascii')
             
-            # Отправляем в Asterisk через ARI channels.play
-            # Используем file:// URI для локального файла
-            # Asterisk ARI channels.play поддерживает file:// URI
-            media_uri = f"file://{wav_path}"
+            # Используем data URI для отправки PCMU напрямую в Asterisk
+            # Asterisk ARI поддерживает data:audio/x-ulaw;base64,<data>
+            media_uri = f"data:audio/x-ulaw;base64,{b64_data}"
             
-            logger.info(f"Sending audio to Asterisk: {media_uri} ({len(pcmu_data)} bytes)")
+            logger.info(f"Sending {len(pcmu_data)} bytes PCMU via ARI data URI")
             await self.ari_client.play_media(
                 channel_id=self.channel_id,
                 media=media_uri
             )
             logger.info(f"✅ Audio sent to Asterisk channel {self.channel_id}")
-            
-            # Удаляем временный файл после небольшой задержки
-            # (даем время Asterisk прочитать файл)
-            async def cleanup():
-                await asyncio.sleep(5)  # Ждем 5 секунд
-                try:
-                    if os.path.exists(wav_path):
-                        os.unlink(wav_path)
-                        logger.debug(f"Cleaned up temporary file: {wav_path}")
-                except Exception as e:
-                    logger.warning(f"Failed to cleanup temp file: {e}")
-            
-            asyncio.create_task(cleanup())
             
         except Exception as e:
             logger.error(f"Failed to send audio to Asterisk: {e}", exc_info=True)
