@@ -195,7 +195,7 @@ class AsteriskARIClient:
         Originate (create) a new call
         
         Args:
-            endpoint: SIP endpoint (e.g., "PJSIP/79991234567@novofon")
+            endpoint: SIP endpoint (e.g., "SIP/79991234567@606147" for chan_sip)
             extension: Extension to dial
             context: Dialplan context
             caller_id: Caller ID to set
