@@ -42,6 +42,7 @@ class AsteriskCallHandler:
     
     def _register_handlers(self):
         """Register ARI event handlers"""
+        logger.info("Registering ARI event handlers...")
         
         @self.ari.on_event('StasisStart')
         async def handle_stasis_start(event):
@@ -80,10 +81,14 @@ class AsteriskCallHandler:
         caller_number = channel.get('caller', {}).get('number')
         args = event.get('args', [])
         
-        logger.info(f"Stasis start: {channel_id}, caller: {caller_number}, args: {args}")
+        logger.info(f"=== STASIS START ===")
+        logger.info(f"Channel ID: {channel_id}")
+        logger.info(f"Caller: {caller_number}")
+        logger.info(f"Args: {args}")
         
         # Determine call direction
         direction = args[0] if args else 'unknown'
+        logger.info(f"Direction: {direction}")
         
         if direction == 'incoming':
             # Incoming call from NovoFon
@@ -128,10 +133,13 @@ class AsteriskCallHandler:
             )
             
             # Start dialogue - FSM will handle greeting
+            logger.info(f"Starting dialogue for call {call_id}...")
             greeting = fsm.process_user_input("", None)  # Empty input to get initial greeting
+            logger.info(f"Greeting text: {greeting}")
             await processor.speak(greeting)
+            logger.info(f"Greeting sent to ElevenLabs")
             
-            logger.info(f"Incoming call answered: {channel_id}, call_id: {call_id}")
+            logger.info(f"✅ Incoming call answered successfully: {channel_id}, call_id: {call_id}")
         
         except Exception as e:
             logger.error(f"Error handling incoming call: {e}", exc_info=True)

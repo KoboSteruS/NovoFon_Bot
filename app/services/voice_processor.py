@@ -66,15 +66,18 @@ class VoiceProcessor:
         
         try:
             # Connect ASR
+            logger.info(f"Connecting to ElevenLabs ASR for channel {self.channel_id}...")
             await self.asr_client.connect()
+            logger.info(f"✅ ElevenLabs ASR connected for channel {self.channel_id}")
             
             # Set up callbacks
             self.asr_client.on_final_transcript = self._handle_transcript
+            logger.info(f"Callbacks set up for channel {self.channel_id}")
             
             # Start processing loop
             self._processing_task = asyncio.create_task(self._processing_loop())
             
-            logger.info("Voice processing started")
+            logger.info(f"✅ Voice processing started for channel {self.channel_id}")
         
         except Exception as e:
             logger.error(f"Failed to start voice processing: {e}")
@@ -184,7 +187,10 @@ class VoiceProcessor:
             text: Text to speak
             streaming: Use streaming TTS (faster)
         """
-        logger.info(f"Speaking: {text}")
+        logger.info(f"=== SPEAK ===")
+        logger.info(f"Channel: {self.channel_id}")
+        logger.info(f"Text: {text}")
+        logger.info(f"Streaming: {streaming}")
         
         try:
             if streaming:
@@ -275,10 +281,11 @@ class VoiceProcessorManager:
             on_final_transcript=on_final_transcript
         )
         
+        logger.info(f"Starting voice processor for channel {channel_id}...")
         await processor.start()
         self.processors[channel_id] = processor
         
-        logger.info(f"Created voice processor for {channel_id}")
+        logger.info(f"✅ Voice processor created and started for channel {channel_id}")
         return processor
     
     async def remove_processor(self, channel_id: str):

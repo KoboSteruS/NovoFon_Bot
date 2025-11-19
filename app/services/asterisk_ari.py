@@ -124,7 +124,8 @@ class AsteriskARIClient:
                     ping_timeout=10
                 ) as websocket:
                     self.ws_connection = websocket
-                    logger.info("WebSocket connected, listening for events...")
+                    logger.info("✅ ARI WebSocket connected successfully")
+                    logger.info(f"Listening for events on app: {self.app_name}")
                     
                     async for message in websocket:
                         try:
@@ -155,8 +156,16 @@ class AsteriskARIClient:
         """
         event_type = event.get('type')
         
-        logger.debug(f"Received event: {event_type}")
-        logger.debug(f"Event data: {event}")
+        # Логируем важные события на уровне INFO
+        if event_type in ['StasisStart', 'StasisEnd', 'ChannelStateChange', 'ChannelHangupRequest']:
+            logger.info(f"Received ARI event: {event_type}")
+            if event_type == 'StasisStart':
+                channel = event.get('channel', {})
+                args = event.get('args', [])
+                logger.info(f"  Channel: {channel.get('id')}, Args: {args}")
+        else:
+            logger.debug(f"Received event: {event_type}")
+            logger.debug(f"Event data: {event}")
         
         # Call registered handler
         handler = self.event_handlers.get(event_type)
@@ -166,7 +175,11 @@ class AsteriskARIClient:
             except Exception as e:
                 logger.error(f"Error in event handler for {event_type}: {e}", exc_info=True)
         else:
-            logger.debug(f"No handler for event type: {event_type}")
+            # Для важных событий логируем на INFO, для остальных - DEBUG
+            if event_type in ['StasisStart', 'StasisEnd']:
+                logger.warning(f"⚠️  No handler registered for event type: {event_type}")
+            else:
+                logger.debug(f"No handler for event type: {event_type}")
     
     def on_event(self, event_type: str):
         """
