@@ -129,7 +129,8 @@ class AsteriskCallHandler:
             # Create voice processor for this call
             processor = await self.voice_manager.create_processor(
                 channel_id=channel_id,
-                on_final_transcript=lambda text: self._handle_user_speech(channel_id, text)
+                on_final_transcript=lambda text: self._handle_user_speech(channel_id, text),
+                ari_client=self.ari  # Передаем ARI клиент для отправки аудио
             )
             
             # Start dialogue - FSM will handle greeting

@@ -2,6 +2,8 @@
 Voice processor - bridges Asterisk RTP audio with ElevenLabs ASR/TTS
 """
 import asyncio
+import tempfile
+import os
 from typing import Optional, Callable
 from loguru import logger
 from io import BytesIO
@@ -28,7 +30,8 @@ class VoiceProcessor:
         self,
         channel_id: str,
         on_transcript: Optional[Callable] = None,
-        on_final_transcript: Optional[Callable] = None
+        on_final_transcript: Optional[Callable] = None,
+        ari_client = None  # Asterisk ARI client для отправки аудио
     ):
         """
         Initialize voice processor
@@ -37,10 +40,12 @@ class VoiceProcessor:
             channel_id: Asterisk channel ID
             on_transcript: Callback for partial transcripts
             on_final_transcript: Callback for final transcripts
+            ari_client: Asterisk ARI client для отправки аудио
         """
         self.channel_id = channel_id
         self.on_transcript = on_transcript
         self.on_final_transcript = on_final_transcript
+        self.ari_client = ari_client
         
         # Clients
         self.asr_client = get_asr_client()
@@ -193,42 +198,167 @@ class VoiceProcessor:
         logger.info(f"Streaming: {streaming}")
         
         try:
+            # Пробуем запросить pcm_8000 напрямую от ElevenLabs
+            # Если не поддерживается - используем pcm_16000 и ресемплим
+            output_format = "pcm_8000"  # Попробуем запросить 8kHz напрямую
+            use_8khz_direct = True
+            
             if streaming:
                 # Streaming TTS - send chunks as they arrive
-                async for audio_chunk in self.tts_client.text_to_speech_stream(
-                    text,
-                    output_format="pcm_16000"
-                ):
-                    # Resample to 8kHz for RTP
-                    audio_8khz = AudioConverter.resample(audio_chunk, 16000, 8000)
+                try:
+                    audio_chunks = []
+                    async for audio_chunk in self.tts_client.text_to_speech_stream(
+                        text,
+                        output_format=output_format
+                    ):
+                        audio_chunks.append(audio_chunk)
                     
-                    # Convert to PCMU for RTP
-                    pcmu_data = AudioConverter.pcm16_to_pcmu(audio_8khz)
+                    # Объединяем все чанки
+                    if audio_chunks:
+                        full_audio = b''.join(audio_chunks)
+                    else:
+                        raise ValueError("No audio chunks received")
+                        
+                except Exception as e:
+                    # Если pcm_8000 не поддерживается - используем pcm_16000
+                    logger.warning(f"Failed to get pcm_8000, falling back to pcm_16000: {e}")
+                    output_format = "pcm_16000"
+                    use_8khz_direct = False
                     
-                    # TODO: Send to Asterisk RTP
-                    # This will be implemented when we integrate with Asterisk audio streaming
-                    self.output_buffer.write(pcmu_data)
+                    audio_chunks = []
+                    async for audio_chunk in self.tts_client.text_to_speech_stream(
+                        text,
+                        output_format=output_format
+                    ):
+                        audio_chunks.append(audio_chunk)
+                    
+                    full_audio = b''.join(audio_chunks) if audio_chunks else b''
+                
+                if full_audio:
+                    # Конвертируем в PCMU
+                    if use_8khz_direct and output_format == "pcm_8000":
+                        # Прямо в PCMU (8kHz PCM16 -> PCMU)
+                        # Убеждаемся, что размер кратен 2 байтам (16-bit)
+                        if len(full_audio) % 2 != 0:
+                            full_audio = full_audio[:-1]
+                        pcmu_data = AudioConverter.pcm16_to_pcmu(full_audio)
+                    else:
+                        # Ресемплим с 16kHz на 8kHz
+                        # Убеждаемся, что размер кратен 2 байтам (16-bit)
+                        if len(full_audio) % 2 != 0:
+                            full_audio = full_audio[:-1]
+                        audio_8khz = AudioConverter.resample(full_audio, 16000, 8000)
+                        pcmu_data = AudioConverter.pcm16_to_pcmu(audio_8khz)
+                    
+                    # Отправляем в Asterisk через ARI
+                    await self._send_audio_to_asterisk(pcmu_data)
             
             else:
                 # Non-streaming TTS - wait for complete audio
-                audio_data = await self.tts_client.text_to_speech(
-                    text,
-                    output_format="pcm_16000"
-                )
+                try:
+                    audio_data = await self.tts_client.text_to_speech(
+                        text,
+                        output_format=output_format
+                    )
+                except Exception as e:
+                    # Если pcm_8000 не поддерживается - используем pcm_16000
+                    logger.warning(f"Failed to get pcm_8000, falling back to pcm_16000: {e}")
+                    output_format = "pcm_16000"
+                    use_8khz_direct = False
+                    audio_data = await self.tts_client.text_to_speech(
+                        text,
+                        output_format=output_format
+                    )
                 
-                # Resample to 8kHz
-                audio_8khz = AudioConverter.resample(audio_data, 16000, 8000)
+                # Конвертируем в PCMU
+                if use_8khz_direct and output_format == "pcm_8000":
+                    # Прямо в PCMU (8kHz PCM16 -> PCMU)
+                    # Убеждаемся, что размер кратен 2 байтам (16-bit)
+                    if len(audio_data) % 2 != 0:
+                        audio_data = audio_data[:-1]
+                    pcmu_data = AudioConverter.pcm16_to_pcmu(audio_data)
+                else:
+                    # Ресемплим с 16kHz на 8kHz
+                    # Убеждаемся, что размер кратен 2 байтам (16-bit)
+                    if len(audio_data) % 2 != 0:
+                        audio_data = audio_data[:-1]
+                    audio_8khz = AudioConverter.resample(audio_data, 16000, 8000)
+                    pcmu_data = AudioConverter.pcm16_to_pcmu(audio_8khz)
                 
-                # Convert to PCMU
-                pcmu_data = AudioConverter.pcm16_to_pcmu(audio_8khz)
-                
-                # TODO: Send to Asterisk RTP
-                self.output_buffer.write(pcmu_data)
+                # Отправляем в Asterisk через ARI
+                await self._send_audio_to_asterisk(pcmu_data)
             
-            logger.info("Speech playback queued")
+            logger.info("✅ Speech sent to Asterisk")
         
         except Exception as e:
             logger.error(f"Error in TTS: {e}", exc_info=True)
+    
+    async def _send_audio_to_asterisk(self, pcmu_data: bytes):
+        """
+        Send PCMU audio to Asterisk channel through ARI
+        
+        Args:
+            pcmu_data: PCMU (μ-law) encoded audio data (8kHz)
+        """
+        if not self.ari_client:
+            logger.warning("ARI client not available, cannot send audio to Asterisk")
+            return
+        
+        try:
+            # Создаем временный WAV файл с PCMU аудио
+            # Asterisk понимает WAV файлы с PCMU кодеком
+            import struct
+            import wave
+            
+            # Создаем временный файл
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_file:
+                wav_path = tmp_file.name
+                
+                # Создаем WAV файл с PCMU
+                # WAV header для PCMU (μ-law) 8kHz mono
+                sample_rate = 8000
+                num_channels = 1
+                sample_width = 1  # PCMU = 1 byte per sample
+                num_frames = len(pcmu_data)
+                
+                # WAV header
+                wav_file = wave.open(wav_path, 'wb')
+                wav_file.setnchannels(num_channels)
+                wav_file.setsampwidth(sample_width)
+                wav_file.setframerate(sample_rate)
+                wav_file.setcomptype('ULAW', 'ulaw')  # PCMU codec
+                wav_file.writeframes(pcmu_data)
+                wav_file.close()
+                
+                logger.info(f"Created temporary WAV file: {wav_path} ({len(pcmu_data)} bytes PCMU)")
+            
+            # Отправляем в Asterisk через ARI channels.play
+            # Используем file:// URI для локального файла
+            # Asterisk ARI channels.play поддерживает file:// URI
+            media_uri = f"file://{wav_path}"
+            
+            logger.info(f"Sending audio to Asterisk: {media_uri} ({len(pcmu_data)} bytes)")
+            await self.ari_client.play_media(
+                channel_id=self.channel_id,
+                media=media_uri
+            )
+            logger.info(f"✅ Audio sent to Asterisk channel {self.channel_id}")
+            
+            # Удаляем временный файл после небольшой задержки
+            # (даем время Asterisk прочитать файл)
+            async def cleanup():
+                await asyncio.sleep(5)  # Ждем 5 секунд
+                try:
+                    if os.path.exists(wav_path):
+                        os.unlink(wav_path)
+                        logger.debug(f"Cleaned up temporary file: {wav_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to cleanup temp file: {e}")
+            
+            asyncio.create_task(cleanup())
+            
+        except Exception as e:
+            logger.error(f"Failed to send audio to Asterisk: {e}", exc_info=True)
     
     def get_output_audio(self) -> Optional[bytes]:
         """
@@ -278,7 +408,8 @@ class VoiceProcessorManager:
         processor = VoiceProcessor(
             channel_id,
             on_transcript=on_transcript,
-            on_final_transcript=on_final_transcript
+            on_final_transcript=on_final_transcript,
+            ari_client=ari_client
         )
         
         logger.info(f"Starting voice processor for channel {channel_id}...")
