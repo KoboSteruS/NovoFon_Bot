@@ -30,22 +30,38 @@ class ElevenLabsError(Exception):
 
 
 def _build_proxy_config() -> Optional[ProxyConfig]:
+    """
+    Build proxy configuration from settings
+    
+    Returns:
+        ProxyConfig if configured, None otherwise
+    """
     proxy_url = settings.elevenlabs_proxy_url
     if not proxy_url:
+        logger.debug("No ELEVENLABS_PROXY_URL configured")
         return None
+    
     parsed = urlparse(proxy_url)
     if not parsed.hostname or not parsed.port:
         logger.warning("Invalid ELEVENLABS_PROXY_URL configuration; proxy ignored")
         return None
+    
     username = settings.elevenlabs_proxy_username or parsed.username
     password = settings.elevenlabs_proxy_password or parsed.password
-    return ProxyConfig(
+    
+    proxy_config = ProxyConfig(
         url=proxy_url,
         host=parsed.hostname,
         port=parsed.port,
         username=username,
         password=password,
     )
+    
+    logger.info(f"✅ Proxy configured for ElevenLabs: {proxy_config.host}:{proxy_config.port}")
+    if username:
+        logger.info(f"   Proxy auth: {username}")
+    
+    return proxy_config
 
 
 class ElevenLabsASRClient:
@@ -74,7 +90,10 @@ class ElevenLabsASRClient:
         self.on_transcript: Optional[Callable] = None
         self.on_final_transcript: Optional[Callable] = None
         
-        logger.info("ElevenLabs ASR client initialized")
+        if self.proxy:
+            logger.info(f"ElevenLabs ASR client initialized with proxy: {self.proxy.host}:{self.proxy.port}")
+        else:
+            logger.info("ElevenLabs ASR client initialized (no proxy)")
     
     async def connect(self, agent_id: Optional[str] = None):
         """
@@ -95,15 +114,22 @@ class ElevenLabsASRClient:
         try:
             connect_kwargs = {}
             if self.proxy:
+                logger.info(f"Using proxy for ElevenLabs: {self.proxy.host}:{self.proxy.port}")
                 connect_kwargs["http_proxy_host"] = self.proxy.host
                 connect_kwargs["http_proxy_port"] = self.proxy.port
                 # Proxy auth через кортеж (websockets 11.0+)
                 if self.proxy.username:
+                    logger.info(f"Proxy authentication: {self.proxy.username}")
                     connect_kwargs["http_proxy_auth"] = (
                         self.proxy.username,
                         self.proxy.password or ""
                     )
+            else:
+                logger.info("No proxy configured for ElevenLabs")
 
+            logger.info(f"Connecting to ElevenLabs WebSocket: {self.ws_url}")
+            logger.info(f"Agent ID: {agent_id or self.default_agent_id}")
+            
             self.websocket = await websockets.connect(
                 url,
                 ping_interval=20,
@@ -111,13 +137,16 @@ class ElevenLabsASRClient:
                 **connect_kwargs,
             )
             self.is_connected = True
-            logger.info("ASR WebSocket connected")
+            logger.info("✅ ElevenLabs ASR WebSocket connected successfully")
             
             # Start listening for transcripts
             asyncio.create_task(self._receive_loop())
         
         except Exception as e:
-            logger.error(f"Failed to connect ASR WebSocket: {e}")
+            logger.error(f"❌ Failed to connect ASR WebSocket: {e}")
+            if self.proxy:
+                logger.error(f"   Proxy was configured: {self.proxy.host}:{self.proxy.port}")
+            logger.error(f"   URL: {url}")
             raise ElevenLabsError(f"ASR connection failed: {e}")
     
     async def disconnect(self):
@@ -212,7 +241,10 @@ class ElevenLabsTTSClient:
                 self.proxy.password or "",
             )
         
-        logger.info("ElevenLabs TTS client initialized")
+        if self.proxy:
+            logger.info(f"ElevenLabs TTS client initialized with proxy: {self.proxy.host}:{self.proxy.port}")
+        else:
+            logger.info("ElevenLabs TTS client initialized (no proxy)")
     
     async def __aenter__(self):
         self.session = aiohttp.ClientSession(
@@ -267,9 +299,11 @@ class ElevenLabsTTSClient:
         logger.info(f"Generating TTS for text: {text[:50]}...")
         
         if not self.session:
-            self.session = aiohttp.ClientSession(
-                headers={'xi-api-key': self.api_key}
-            )
+            session_kwargs = {'headers': {'xi-api-key': self.api_key}}
+            if self.proxy:
+                logger.info(f"Using proxy for TTS: {self.proxy.url}")
+                session_kwargs['connector'] = aiohttp.TCPConnector()
+            self.session = aiohttp.ClientSession(**session_kwargs)
         
         request_kwargs = {}
         if self.proxy:
@@ -340,15 +374,18 @@ class ElevenLabsTTSClient:
         logger.info(f"Streaming TTS for text: {text[:50]}...")
         
         if not self.session:
-            self.session = aiohttp.ClientSession(
-                headers={'xi-api-key': self.api_key}
-            )
+            session_kwargs = {'headers': {'xi-api-key': self.api_key}}
+            if self.proxy:
+                logger.info(f"Using proxy for streaming TTS: {self.proxy.url}")
+                session_kwargs['connector'] = aiohttp.TCPConnector()
+            self.session = aiohttp.ClientSession(**session_kwargs)
         
         request_kwargs = {}
         if self.proxy:
             request_kwargs["proxy"] = self.proxy.url
             if self.proxy_auth:
                 request_kwargs["proxy_auth"] = self.proxy_auth
+                logger.info(f"Proxy auth configured for streaming TTS")
 
         try:
             async with self.session.post(
