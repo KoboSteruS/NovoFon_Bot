@@ -1,0 +1,38 @@
+[Unit]
+Description=NovoFon Voice Bot
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=notify
+User=root
+Group=root
+WorkingDirectory=/root/NovoFon_Bot
+Environment="PATH=/root/NovoFon_Bot/venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PYTHONUNBUFFERED=1"
+
+# Прокси для ElevenLabs WebSocket (websockets библиотека использует эти переменные автоматически)
+Environment="HTTP_PROXY=http://71cPu3:1XjoMQ@45.85.162.205:8000"
+Environment="HTTPS_PROXY=http://71cPu3:1XjoMQ@45.85.162.205:8000"
+Environment="http_proxy=http://71cPu3:1XjoMQ@45.85.162.205:8000"
+Environment="https_proxy=http://71cPu3:1XjoMQ@45.85.162.205:8000"
+
+# Загрузка переменных из .env файла
+EnvironmentFile=/root/NovoFon_Bot/.env
+
+ExecStart=/root/NovoFon_Bot/venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 9000 --workers 4
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+KillSignal=SIGINT
+TimeoutStopSec=30
+Restart=always
+RestartSec=10
+
+# Логирование
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=novofon-bot
+
+[Install]
+WantedBy=multi-user.target
+

@@ -112,29 +112,23 @@ class ElevenLabsASRClient:
             url += f"&agent_id={agent_id or self.default_agent_id}"
         
         try:
-            connect_kwargs = {}
+            # Прокси для WebSocket настраивается через переменные окружения
+            # HTTP_PROXY и HTTPS_PROXY (настраиваются в systemd service)
+            # websockets библиотека автоматически использует эти переменные
             if self.proxy:
-                logger.info(f"Using proxy for ElevenLabs: {self.proxy.host}:{self.proxy.port}")
-                connect_kwargs["http_proxy_host"] = self.proxy.host
-                connect_kwargs["http_proxy_port"] = self.proxy.port
-                # Proxy auth через кортеж (websockets 11.0+)
-                if self.proxy.username:
-                    logger.info(f"Proxy authentication: {self.proxy.username}")
-                    connect_kwargs["http_proxy_auth"] = (
-                        self.proxy.username,
-                        self.proxy.password or ""
-                    )
+                logger.info(f"Proxy configured: {self.proxy.host}:{self.proxy.port}")
+                logger.info("WebSocket will use HTTP_PROXY/HTTPS_PROXY from environment")
             else:
                 logger.info("No proxy configured for ElevenLabs")
 
             logger.info(f"Connecting to ElevenLabs WebSocket: {self.ws_url}")
             logger.info(f"Agent ID: {agent_id or self.default_agent_id}")
             
+            # websockets.connect автоматически использует HTTP_PROXY/HTTPS_PROXY из окружения
             self.websocket = await websockets.connect(
                 url,
                 ping_interval=20,
                 ping_timeout=10,
-                **connect_kwargs,
             )
             self.is_connected = True
             logger.info("✅ ElevenLabs ASR WebSocket connected successfully")
@@ -145,7 +139,8 @@ class ElevenLabsASRClient:
         except Exception as e:
             logger.error(f"❌ Failed to connect ASR WebSocket: {e}")
             if self.proxy:
-                logger.error(f"   Proxy was configured: {self.proxy.host}:{self.proxy.port}")
+                logger.error(f"   Proxy configured: {self.proxy.host}:{self.proxy.port}")
+                logger.error(f"   Check HTTP_PROXY/HTTPS_PROXY environment variables in systemd service")
             logger.error(f"   URL: {url}")
             raise ElevenLabsError(f"ASR connection failed: {e}")
     
