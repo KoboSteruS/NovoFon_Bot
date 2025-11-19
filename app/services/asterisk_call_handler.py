@@ -230,7 +230,7 @@ class AsteriskCallHandler:
         logger.info(f"Initiating outbound call to {phone_number} for call {call_id}")
         
         # Format endpoint using dialplan context 'outgoing'
-        # The dialplan will handle Dial(PJSIP/${EXTEN}@novofon)
+        # The dialplan will handle Dial(PJSIP/${EXTEN}@novofon-endpoint)
         # Remove + and any spaces from phone number
         clean_phone = phone_number.lstrip('+').replace(' ', '').replace('-', '').replace('(', '').replace(')', '')
         endpoint = f"Local/{clean_phone}@outgoing"
