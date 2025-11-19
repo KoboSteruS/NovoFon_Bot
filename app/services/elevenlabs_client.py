@@ -3,6 +3,7 @@ ElevenLabs client for real-time Speech-to-Text (ASR) and Text-to-Speech (TTS)
 """
 import asyncio
 import json
+import base64
 from dataclasses import dataclass
 from io import BytesIO
 from typing import Optional, Callable, AsyncIterator
@@ -112,23 +113,40 @@ class ElevenLabsASRClient:
             url += f"&agent_id={agent_id or self.default_agent_id}"
         
         try:
-            # Прокси для WebSocket настраивается через переменные окружения
-            # HTTP_PROXY и HTTPS_PROXY (настраиваются в systemd service)
-            # websockets библиотека автоматически использует эти переменные
+            # Настройка прокси для WebSocket подключения
+            connect_kwargs = {
+                "ping_interval": 20,
+                "ping_timeout": 10,
+            }
+            
             if self.proxy:
-                logger.info(f"Proxy configured: {self.proxy.host}:{self.proxy.port}")
-                logger.info("WebSocket will use HTTP_PROXY/HTTPS_PROXY from environment")
+                logger.info(f"Using proxy for ElevenLabs WebSocket: {self.proxy.host}:{self.proxy.port}")
+                
+                # Формируем URI прокси с авторизацией
+                proxy_uri = f"http://{self.proxy.username}:{self.proxy.password}@{self.proxy.host}:{self.proxy.port}"
+                
+                # Proxy-Authorization header (Basic Auth)
+                auth_string = f"{self.proxy.username}:{self.proxy.password}"
+                auth_token = base64.b64encode(auth_string.encode()).decode()
+                proxy_headers = {
+                    "Proxy-Authorization": f"Basic {auth_token}"
+                }
+                
+                # Добавляем прокси в параметры подключения
+                connect_kwargs["extra_headers"] = proxy_headers
+                connect_kwargs["open_connection_args"] = {"proxy": proxy_uri}
+                
+                logger.info(f"Proxy authentication configured for user: {self.proxy.username}")
             else:
-                logger.info("No proxy configured for ElevenLabs")
+                logger.info("No proxy configured for ElevenLabs WebSocket")
 
             logger.info(f"Connecting to ElevenLabs WebSocket: {self.ws_url}")
             logger.info(f"Agent ID: {agent_id or self.default_agent_id}")
             
-            # websockets.connect автоматически использует HTTP_PROXY/HTTPS_PROXY из окружения
+            # Подключение с прокси (если настроен)
             self.websocket = await websockets.connect(
                 url,
-                ping_interval=20,
-                ping_timeout=10,
+                **connect_kwargs
             )
             self.is_connected = True
             logger.info("✅ ElevenLabs ASR WebSocket connected successfully")
@@ -140,7 +158,7 @@ class ElevenLabsASRClient:
             logger.error(f"❌ Failed to connect ASR WebSocket: {e}")
             if self.proxy:
                 logger.error(f"   Proxy configured: {self.proxy.host}:{self.proxy.port}")
-                logger.error(f"   Check HTTP_PROXY/HTTPS_PROXY environment variables in systemd service")
+                logger.error(f"   Proxy user: {self.proxy.username}")
             logger.error(f"   URL: {url}")
             raise ElevenLabsError(f"ASR connection failed: {e}")
     

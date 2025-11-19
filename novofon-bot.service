@@ -11,12 +11,6 @@ WorkingDirectory=/root/NovoFon_Bot
 Environment="PATH=/root/NovoFon_Bot/venv/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="PYTHONUNBUFFERED=1"
 
-# Прокси для ElevenLabs WebSocket (websockets библиотека использует эти переменные автоматически)
-Environment="HTTP_PROXY=http://71cPu3:1XjoMQ@45.85.162.205:8000"
-Environment="HTTPS_PROXY=http://71cPu3:1XjoMQ@45.85.162.205:8000"
-Environment="http_proxy=http://71cPu3:1XjoMQ@45.85.162.205:8000"
-Environment="https_proxy=http://71cPu3:1XjoMQ@45.85.162.205:8000"
-
 # Загрузка переменных из .env файла
 EnvironmentFile=/root/NovoFon_Bot/.env
 
