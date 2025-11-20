@@ -1,0 +1,9 @@
+# Baresip SIP accounts
+# Place this file in ~/.baresip/accounts
+# Format: <sip:user@host:port>;auth_pass=password;regint=interval
+
+# Local SIP account for Asterisk to call
+# Asterisk will call: SIP:voicebot@127.0.0.1:5060
+# regint=0 означает что регистрация не нужна (IP-auth)
+<sip:voicebot@127.0.0.1:5060>;auth_pass=voicebot123;regint=0
+

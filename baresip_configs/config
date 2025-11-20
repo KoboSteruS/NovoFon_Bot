@@ -1,0 +1,29 @@
+# Baresip configuration for NovoFon Bot
+# Place this file in ~/.baresip/config
+
+# Audio driver (null для сервера без звуковой карты)
+audio_driver		null
+audio_player		null
+audio_source		null
+
+# SIP settings
+sip_listen		0.0.0.0:5060
+
+# WebSocket module for Python control
+module			websock.so
+websock_listen		0.0.0.0:8000
+
+# HTTP request module (optional, for status)
+module			httpreq.so
+
+# Audio codecs (только PCMU для совместимости с Asterisk)
+audio_codecs		pcmu
+
+# RTP settings
+rtp_tos			184
+rtp_port_min		10000
+rtp_port_max		20000
+
+# Logging
+log_level		info
+

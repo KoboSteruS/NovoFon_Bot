@@ -518,6 +518,22 @@ class AudioConverter:
             raise
     
     @staticmethod
+    def resample_pcm16(audio_data: bytes, from_rate: int, to_rate: int, channels: int = 1) -> bytes:
+        """
+        Resample PCM16 audio
+        
+        Args:
+            audio_data: Input audio (PCM 16-bit)
+            from_rate: Source sample rate
+            to_rate: Target sample rate
+            channels: Number of channels
+        
+        Returns:
+            Resampled audio (PCM 16-bit)
+        """
+        return AudioConverter.resample(audio_data, from_rate, to_rate, channels)
+    
+    @staticmethod
     def resample(audio_data: bytes, from_rate: int, to_rate: int, channels: int = 1) -> bytes:
         """
         Resample audio

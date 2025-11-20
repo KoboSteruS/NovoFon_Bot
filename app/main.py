@@ -46,6 +46,21 @@ async def lifespan(app: FastAPI):
         logger.error(f"Failed to initialize database: {e}")
         raise
     
+    # Initialize Baresip client (for RTP handling)
+    baresip_client = None
+    try:
+        from app.services.baresip_client import BaresipClient
+        
+        baresip_client = BaresipClient(
+            ws_url="ws://127.0.0.1:8000/ws"
+        )
+        await baresip_client.connect()
+        
+        logger.info("✅ Baresip client connected successfully")
+    except Exception as e:
+        logger.warning(f"Baresip not available: {e}")
+        logger.info("Bot will work without baresip (RTP handling disabled)")
+    
     # Initialize Asterisk ARI (if configured)
     ari_client = None
     try:
@@ -87,6 +102,14 @@ async def lifespan(app: FastAPI):
         logger.info("Call queue manager stopped")
     except Exception as e:
         logger.error(f"Error stopping queue manager: {e}")
+    
+    # Disconnect Baresip client
+    if baresip_client:
+        try:
+            await baresip_client.disconnect()
+            logger.info("Baresip client disconnected")
+        except Exception as e:
+            logger.error(f"Error disconnecting baresip: {e}")
     
     # Disconnect Asterisk ARI
     if ari_client:
