@@ -377,7 +377,7 @@ class VoiceProcessor:
     
     async def _send_audio_to_asterisk(self, pcmu_data: bytes):
         """
-        Send PCMU audio to Asterisk channel through ARI using WAV file
+        Send PCMU audio to Asterisk channel through ARI using raw .ulaw file
         
         Args:
             pcmu_data: PCMU (μ-law) encoded audio data (8kHz)
@@ -387,75 +387,72 @@ class VoiceProcessor:
             return
         
         try:
-            import struct
             import uuid
             
             # Создаем уникальное имя файла
             file_id = str(uuid.uuid4())[:8]
-            wav_filename = f"tts_{file_id}.wav"
+            ulaw_filename = f"tts_{file_id}"
             
             # Путь к директории звуков Asterisk
+            # Asterisk ищет файлы в /var/lib/asterisk/sounds/ по умолчанию
+            # Можно использовать поддиректорию tts/
             sounds_dir = "/var/lib/asterisk/sounds/tts"
-            wav_path = f"{sounds_dir}/{wav_filename}"
+            ulaw_path = f"{sounds_dir}/{ulaw_filename}.ulaw"
             
             # Создаем директорию если её нет
             os.makedirs(sounds_dir, exist_ok=True)
             
-            # Создаем WAV файл с PCMU вручную (модуль wave не поддерживает PCMU правильно)
-            # WAV header для PCMU (μ-law) 8kHz mono
-            sample_rate = 8000
-            num_channels = 1
-            sample_width = 1  # PCMU = 1 byte per sample
-            num_frames = len(pcmu_data)
-            data_size = num_frames
-            
-            # WAV header structure
-            # RIFF header
-            wav_header = b'RIFF'
-            file_size = 36 + data_size  # 36 = header size without data
-            wav_header += struct.pack('<I', file_size)
-            wav_header += b'WAVE'
-            
-            # fmt chunk
-            wav_header += b'fmt '
-            wav_header += struct.pack('<I', 18)  # fmt chunk size (18 for PCMU)
-            wav_header += struct.pack('<H', 7)   # Audio format: 7 = μ-law
-            wav_header += struct.pack('<H', num_channels)
-            wav_header += struct.pack('<I', sample_rate)
-            wav_header += struct.pack('<I', sample_rate * num_channels * sample_width)  # Byte rate
-            wav_header += struct.pack('<H', num_channels * sample_width)  # Block align
-            wav_header += struct.pack('<H', 8)   # Bits per sample
-            wav_header += struct.pack('<H', 0)   # Extension size (0 for PCMU)
-            
-            # data chunk
-            wav_header += b'data'
-            wav_header += struct.pack('<I', data_size)
-            
-            # Записываем WAV файл
-            with open(wav_path, 'wb') as f:
-                f.write(wav_header)
+            # Записываем raw PCMU данные в .ulaw файл
+            # Asterisk понимает raw .ulaw файлы напрямую (8kHz, mono, μ-law)
+            with open(ulaw_path, 'wb') as f:
                 f.write(pcmu_data)
             
-            logger.info(f"Created WAV file: {wav_path} ({len(pcmu_data)} bytes PCMU)")
+            # Проверяем, что файл создался
+            if not os.path.exists(ulaw_path):
+                raise FileNotFoundError(f"Failed to create ULAW file: {ulaw_path}")
+            
+            file_size = os.path.getsize(ulaw_path)
+            if file_size != len(pcmu_data):
+                raise ValueError(f"File size mismatch: expected {len(pcmu_data)}, got {file_size}")
+            
+            logger.info(f"✅ Created ULAW file: {ulaw_path} ({file_size} bytes PCMU)")
             
             # Отправляем в Asterisk через sound: URI
-            media_uri = f"sound:tts/{wav_filename}"
+            # Asterisk автоматически найдет файл с расширением .ulaw
+            # Формат: sound:tts/filename (без расширения)
+            media_uri = f"sound:tts/{ulaw_filename}"
             
             logger.info(f"Sending audio to Asterisk: {media_uri} ({len(pcmu_data)} bytes PCMU)")
-            await self.ari_client.play_media(
-                channel_id=self.channel_id,
-                media=media_uri
-            )
-            logger.info(f"✅ Audio sent to Asterisk channel {self.channel_id}")
+            logger.info(f"File path: {ulaw_path}")
+            
+            try:
+                await self.ari_client.play_media(
+                    channel_id=self.channel_id,
+                    media=media_uri
+                )
+                logger.info(f"✅ Audio sent to Asterisk channel {self.channel_id}")
+            except Exception as play_error:
+                logger.error(f"Failed to play media: {play_error}")
+                # Пробуем альтернативный формат - с полным путем
+                logger.info(f"Trying alternative format: sound:{ulaw_filename}")
+                try:
+                    await self.ari_client.play_media(
+                        channel_id=self.channel_id,
+                        media=f"sound:{ulaw_filename}"
+                    )
+                    logger.info(f"✅ Audio sent via alternative format")
+                except Exception as alt_error:
+                    logger.error(f"Alternative format also failed: {alt_error}")
+                    raise
             
             # Удаляем временный файл после небольшой задержки
             # (даем время Asterisk прочитать файл)
             async def cleanup():
-                await asyncio.sleep(10)  # Ждем 10 секунд
+                await asyncio.sleep(15)  # Ждем 15 секунд (больше для надежности)
                 try:
-                    if os.path.exists(wav_path):
-                        os.unlink(wav_path)
-                        logger.debug(f"Cleaned up temporary file: {wav_path}")
+                    if os.path.exists(ulaw_path):
+                        os.unlink(ulaw_path)
+                        logger.debug(f"Cleaned up temporary file: {ulaw_path}")
                 except Exception as e:
                     logger.warning(f"Failed to cleanup temp file: {e}")
             
@@ -463,6 +460,7 @@ class VoiceProcessor:
             
         except Exception as e:
             logger.error(f"Failed to send audio to Asterisk: {e}", exc_info=True)
+            raise
     
     def get_output_audio(self) -> Optional[bytes]:
         """
