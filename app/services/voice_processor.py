@@ -377,7 +377,7 @@ class VoiceProcessor:
     
     async def _send_audio_to_asterisk(self, pcmu_data: bytes):
         """
-        Send PCMU audio to Asterisk channel through ARI using data URI
+        Send PCMU audio to Asterisk channel through ARI using WAV file
         
         Args:
             pcmu_data: PCMU (μ-law) encoded audio data (8kHz)
@@ -387,21 +387,79 @@ class VoiceProcessor:
             return
         
         try:
-            import base64
+            import struct
+            import uuid
             
-            # Кодируем PCMU в base64 для data URI
-            b64_data = base64.b64encode(pcmu_data).decode('ascii')
+            # Создаем уникальное имя файла
+            file_id = str(uuid.uuid4())[:8]
+            wav_filename = f"tts_{file_id}.wav"
             
-            # Используем data URI для отправки PCMU напрямую в Asterisk
-            # Asterisk ARI поддерживает data:audio/x-ulaw;base64,<data>
-            media_uri = f"data:audio/x-ulaw;base64,{b64_data}"
+            # Путь к директории звуков Asterisk
+            sounds_dir = "/var/lib/asterisk/sounds/tts"
+            wav_path = f"{sounds_dir}/{wav_filename}"
             
-            logger.info(f"Sending {len(pcmu_data)} bytes PCMU via ARI data URI")
+            # Создаем директорию если её нет
+            os.makedirs(sounds_dir, exist_ok=True)
+            
+            # Создаем WAV файл с PCMU вручную (модуль wave не поддерживает PCMU правильно)
+            # WAV header для PCMU (μ-law) 8kHz mono
+            sample_rate = 8000
+            num_channels = 1
+            sample_width = 1  # PCMU = 1 byte per sample
+            num_frames = len(pcmu_data)
+            data_size = num_frames
+            
+            # WAV header structure
+            # RIFF header
+            wav_header = b'RIFF'
+            file_size = 36 + data_size  # 36 = header size without data
+            wav_header += struct.pack('<I', file_size)
+            wav_header += b'WAVE'
+            
+            # fmt chunk
+            wav_header += b'fmt '
+            wav_header += struct.pack('<I', 18)  # fmt chunk size (18 for PCMU)
+            wav_header += struct.pack('<H', 7)   # Audio format: 7 = μ-law
+            wav_header += struct.pack('<H', num_channels)
+            wav_header += struct.pack('<I', sample_rate)
+            wav_header += struct.pack('<I', sample_rate * num_channels * sample_width)  # Byte rate
+            wav_header += struct.pack('<H', num_channels * sample_width)  # Block align
+            wav_header += struct.pack('<H', 8)   # Bits per sample
+            wav_header += struct.pack('<H', 0)   # Extension size (0 for PCMU)
+            
+            # data chunk
+            wav_header += b'data'
+            wav_header += struct.pack('<I', data_size)
+            
+            # Записываем WAV файл
+            with open(wav_path, 'wb') as f:
+                f.write(wav_header)
+                f.write(pcmu_data)
+            
+            logger.info(f"Created WAV file: {wav_path} ({len(pcmu_data)} bytes PCMU)")
+            
+            # Отправляем в Asterisk через sound: URI
+            media_uri = f"sound:tts/{wav_filename}"
+            
+            logger.info(f"Sending audio to Asterisk: {media_uri} ({len(pcmu_data)} bytes PCMU)")
             await self.ari_client.play_media(
                 channel_id=self.channel_id,
                 media=media_uri
             )
             logger.info(f"✅ Audio sent to Asterisk channel {self.channel_id}")
+            
+            # Удаляем временный файл после небольшой задержки
+            # (даем время Asterisk прочитать файл)
+            async def cleanup():
+                await asyncio.sleep(10)  # Ждем 10 секунд
+                try:
+                    if os.path.exists(wav_path):
+                        os.unlink(wav_path)
+                        logger.debug(f"Cleaned up temporary file: {wav_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to cleanup temp file: {e}")
+            
+            asyncio.create_task(cleanup())
             
         except Exception as e:
             logger.error(f"Failed to send audio to Asterisk: {e}", exc_info=True)
