@@ -49,11 +49,9 @@ async def lifespan(app: FastAPI):
     # Initialize Baresip client (for RTP handling)
     baresip_client = None
     try:
-        from app.services.baresip_client import BaresipClient
+        from app.services.baresip_client import get_baresip_client
         
-        baresip_client = BaresipClient(
-            ws_url="ws://127.0.0.1:8000/ws"
-        )
+        baresip_client = get_baresip_client()
         await baresip_client.connect()
         
         logger.info("✅ Baresip client connected successfully")

@@ -27,10 +27,12 @@ class BaresipManager:
         
         try:
             # Create baresip client
-            ws_url = getattr(settings, 'baresip_ws_url', 'ws://127.0.0.1:8000/ws')
+            host = getattr(settings, 'baresip_host', '127.0.0.1')
+            port = getattr(settings, 'baresip_port', 4444)
             
             self.client = BaresipClient(
-                ws_url=ws_url,
+                host=host,
+                port=port,
                 on_call_started=self._on_call_started,
                 on_call_ended=self._on_call_ended
             )
