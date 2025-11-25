@@ -87,7 +87,14 @@ class AsteriskCallHandler:
         logger.info(f"Args: {args}")
         
         # Determine call direction
+        # Если args пустой или direction unknown, считаем входящим звонком
         direction = args[0] if args else 'unknown'
+        
+        # Если direction unknown, считаем входящим (внешние звонки от NovoFon)
+        if direction not in ['incoming', 'outgoing']:
+            logger.info(f"Direction unknown or empty, treating as incoming call")
+            direction = 'incoming'
+        
         logger.info(f"Direction: {direction}")
         
         if direction == 'incoming':
@@ -100,7 +107,9 @@ class AsteriskCallHandler:
             await self._handle_outgoing_call(channel_id, destination)
         
         else:
-            logger.warning(f"Unknown call direction: {direction}")
+            # Fallback - treat as incoming
+            logger.warning(f"Unexpected direction: {direction}, treating as incoming")
+            await self._handle_incoming_call(channel_id, caller_number)
     
     async def _handle_incoming_call(self, channel_id: str, caller_number: str):
         """
@@ -110,41 +119,58 @@ class AsteriskCallHandler:
             channel_id: Asterisk channel ID
             caller_number: Caller's phone number
         """
-        logger.info(f"Handling incoming call from {caller_number}")
+        logger.info(f"📞 Handling incoming call from {caller_number} on channel {channel_id}")
         
         try:
-            # Answer the call
+            # Step 1: Answer the call
+            logger.info(f"1️⃣ Answering channel {channel_id}...")
             await self.ari.answer_channel(channel_id)
+            logger.info(f"✅ Channel {channel_id} answered")
             
-            # Create call record in database
-            # Note: CallManager is imported lazily to avoid circular import
-            # For now, we'll create a minimal call record
+            # Step 2: Create call record in database
             call_id = uuid.uuid4()
             self.active_channels[channel_id] = call_id
+            logger.info(f"2️⃣ Created call record: {call_id}")
             
-            # Create FSM for this call
+            # Step 3: Create FSM for this call
             fsm = DialogueFSM()
             self.fsm_instances[channel_id] = fsm
+            logger.info(f"3️⃣ Created FSM for call {call_id}")
             
-            # Create voice processor for this call
+            # Step 4: Create voice processor for this call
+            logger.info(f"4️⃣ Creating voice processor for channel {channel_id}...")
             processor = await self.voice_manager.create_processor(
                 channel_id=channel_id,
                 on_final_transcript=lambda text: self._handle_user_speech(channel_id, text),
                 ari_client=self.ari  # Передаем ARI клиент для отправки аудио
             )
+            logger.info(f"✅ Voice processor created for channel {channel_id}")
             
-            # Start dialogue - FSM will handle greeting
-            logger.info(f"Starting dialogue for call {call_id}...")
+            # Step 5: Start voice processing (ASR/TTS)
+            logger.info(f"5️⃣ Starting voice processing for channel {channel_id}...")
+            await processor.start()
+            logger.info(f"✅ Voice processing started for channel {channel_id}")
+            
+            # Step 6: Start dialogue - FSM will handle greeting
+            logger.info(f"6️⃣ Starting dialogue for call {call_id}...")
             greeting = fsm.process_user_input("", None)  # Empty input to get initial greeting
-            logger.info(f"Greeting text: {greeting}")
-            await processor.speak(greeting)
-            logger.info(f"Greeting sent to ElevenLabs")
+            logger.info(f"📢 Greeting text: {greeting}")
             
-            logger.info(f"✅ Incoming call answered successfully: {channel_id}, call_id: {call_id}")
+            if greeting:
+                logger.info(f"7️⃣ Sending greeting to ElevenLabs TTS...")
+                await processor.speak(greeting)
+                logger.info(f"✅ Greeting sent to ElevenLabs TTS")
+            else:
+                logger.warning(f"No greeting text from FSM")
+            
+            logger.info(f"✅✅✅ Incoming call fully processed: {channel_id}, call_id: {call_id}")
         
         except Exception as e:
-            logger.error(f"Error handling incoming call: {e}", exc_info=True)
-            await self.ari.hangup_channel(channel_id)
+            logger.error(f"❌ Error handling incoming call: {e}", exc_info=True)
+            try:
+                await self.ari.hangup_channel(channel_id)
+            except Exception as hangup_error:
+                logger.error(f"Failed to hangup channel: {hangup_error}")
     
     async def _handle_outgoing_call(self, channel_id: str, destination: Optional[str]):
         """
