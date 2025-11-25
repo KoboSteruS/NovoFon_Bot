@@ -2,6 +2,8 @@
 Asterisk call handler - manages call flow through ARI
 """
 import uuid
+import asyncio
+import os
 from typing import Dict, Optional
 from loguru import logger
 
@@ -150,6 +152,27 @@ class AsteriskCallHandler:
             logger.info(f"5️⃣ Starting voice processing for channel {channel_id}...")
             await processor.start()
             logger.info(f"✅ Voice processing started for channel {channel_id}")
+            
+            # Step 5.5: Start receiving RTP audio from channel
+            # Используем запись канала для получения аудио в реальном времени
+            logger.info(f"5.5️⃣ Starting audio recording for channel {channel_id}...")
+            try:
+                # Запускаем запись канала для получения аудио
+                # Запись будет использоваться для чтения аудио в реальном времени
+                recording_name = f"channel_{channel_id}_audio"
+                await self.ari.start_recording(
+                    channel_id=channel_id,
+                    name=recording_name,
+                    format="slin16"  # Raw PCM16 для чтения в реальном времени
+                )
+                logger.info(f"✅ Audio recording started for channel {channel_id}")
+                
+                # Запускаем задачу для чтения аудио из записи
+                asyncio.create_task(self._read_audio_from_recording(channel_id, recording_name))
+            except Exception as e:
+                logger.warning(f"Failed to start audio recording: {e}, will try alternative method")
+                # Альтернативный метод - используем ExternalMedia если доступен
+                # Но для простоты пока пропускаем, если запись не работает
             
             # Step 6: Start dialogue - FSM will handle greeting
             logger.info(f"6️⃣ Starting dialogue for call {call_id}...")
@@ -335,6 +358,55 @@ class AsteriskCallHandler:
             logger.info(f"Audio streaming active for {channel_id}")
         else:
             logger.warning(f"No voice processor for {channel_id}")
+    
+    async def _read_audio_from_recording(self, channel_id: str, recording_name: str):
+        """
+        Read audio from recording and send to voice processor
+        
+        Args:
+            channel_id: Channel ID
+            recording_name: Recording name
+        """
+        processor = self.voice_manager.get_processor(channel_id)
+        if not processor:
+            logger.warning(f"No voice processor for channel {channel_id}")
+            return
+        
+        try:
+            # Читаем аудио из записи в реальном времени
+            # Запись находится в /var/spool/asterisk/recording/{recording_name}.slin16
+            recording_path = f"/var/spool/asterisk/recording/{recording_name}.slin16"
+            
+            # Ждем пока файл появится
+            import time
+            max_wait = 10
+            waited = 0
+            while not os.path.exists(recording_path) and waited < max_wait:
+                await asyncio.sleep(0.5)
+                waited += 0.5
+            
+            if not os.path.exists(recording_path):
+                logger.warning(f"Recording file not found: {recording_path}")
+                return
+            
+            logger.info(f"Reading audio from recording: {recording_path}")
+            
+            # Читаем аудио из файла в реальном времени
+            chunk_size = 3200  # 100ms при 16kHz, 16-bit mono (16000 * 2 * 0.1)
+            with open(recording_path, 'rb') as f:
+                while processor.is_running:
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        await asyncio.sleep(0.1)  # Ждем новых данных
+                        continue
+                    
+                    # Отправляем аудио в voice processor
+                    await processor.receive_rtp_audio(chunk, codec="l16")
+                    
+                    await asyncio.sleep(0.05)  # Небольшая задержка
+        
+        except Exception as e:
+            logger.error(f"Error reading audio from recording: {e}", exc_info=True)
     
     async def _handle_user_speech(self, channel_id: str, text: str):
         """
