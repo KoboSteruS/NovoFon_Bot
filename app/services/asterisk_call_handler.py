@@ -415,56 +415,56 @@ class AsteriskCallHandler:
                 import struct
                 
                 with wave.open(recording_path, 'rb') as wav_file:
-                # Проверяем формат
-                sample_rate = wav_file.getframerate()
-                channels = wav_file.getnchannels()
-                sample_width = wav_file.getsampwidth()
-                
-                logger.info(f"WAV file: {sample_rate}Hz, {channels}ch, {sample_width*8}bit")
-                
-                # Читаем аудио чанками
-                chunk_frames = int(sample_rate * 0.1)  # 100ms чанки
-                
-                last_pos = 0
-                while processor.is_running:
-                    current_pos = wav_file.tell()
+                    # Проверяем формат
+                    sample_rate = wav_file.getframerate()
+                    channels = wav_file.getnchannels()
+                    sample_width = wav_file.getsampwidth()
                     
-                    # Если файл не изменился, ждем
-                    if current_pos == last_pos:
-                        await asyncio.sleep(0.1)
-                        continue
+                    logger.info(f"WAV file: {sample_rate}Hz, {channels}ch, {sample_width*8}bit")
                     
-                    last_pos = current_pos
+                    # Читаем аудио чанками
+                    chunk_frames = int(sample_rate * 0.1)  # 100ms чанки
                     
-                    # Читаем новые данные
-                    frames = wav_file.readframes(chunk_frames)
-                    if not frames:
-                        await asyncio.sleep(0.1)
-                        continue
-                    
-                    # Если это не 16-bit PCM, пропускаем (нужна конвертация)
-                    if sample_width != 2:
-                        logger.warning(f"Unsupported sample width: {sample_width}")
-                        await asyncio.sleep(0.1)
-                        continue
-                    
-                    # Если стерео, конвертируем в моно (берем левый канал)
-                    if channels == 2:
-                        # Конвертируем стерео в моно (берем каждый второй сэмпл)
-                        pcm16_data = struct.unpack(f'<{len(frames)//2}h', frames)
-                        mono_data = pcm16_data[::2]  # Берем левый канал
-                        frames = struct.pack(f'<{len(mono_data)}h', *mono_data)
-                    
-                    # Ресемплим если нужно (обычно запись в 8kHz, нужен 16kHz)
-                    if sample_rate == 8000:
-                        # Ресемплим с 8kHz на 16kHz
-                        from app.services.elevenlabs_client import AudioConverter
-                        frames = AudioConverter.resample_pcm16(frames, 8000, 16000)
-                    
-                    # Отправляем аудио в voice processor
-                    await processor.receive_rtp_audio(frames, codec="l16")
-                    
-                    await asyncio.sleep(0.05)  # Небольшая задержка
+                    last_pos = 0
+                    while processor.is_running:
+                        current_pos = wav_file.tell()
+                        
+                        # Если файл не изменился, ждем
+                        if current_pos == last_pos:
+                            await asyncio.sleep(0.1)
+                            continue
+                        
+                        last_pos = current_pos
+                        
+                        # Читаем новые данные
+                        frames = wav_file.readframes(chunk_frames)
+                        if not frames:
+                            await asyncio.sleep(0.1)
+                            continue
+                        
+                        # Если это не 16-bit PCM, пропускаем (нужна конвертация)
+                        if sample_width != 2:
+                            logger.warning(f"Unsupported sample width: {sample_width}")
+                            await asyncio.sleep(0.1)
+                            continue
+                        
+                        # Если стерео, конвертируем в моно (берем левый канал)
+                        if channels == 2:
+                            # Конвертируем стерео в моно (берем каждый второй сэмпл)
+                            pcm16_data = struct.unpack(f'<{len(frames)//2}h', frames)
+                            mono_data = pcm16_data[::2]  # Берем левый канал
+                            frames = struct.pack(f'<{len(mono_data)}h', *mono_data)
+                        
+                        # Ресемплим если нужно (обычно запись в 8kHz, нужен 16kHz)
+                        if sample_rate == 8000:
+                            # Ресемплим с 8kHz на 16kHz
+                            from app.services.elevenlabs_client import AudioConverter
+                            frames = AudioConverter.resample_pcm16(frames, 8000, 16000)
+                        
+                        # Отправляем аудио в voice processor
+                        await processor.receive_rtp_audio(frames, codec="l16")
+                        
+                        await asyncio.sleep(0.05)  # Небольшая задержка
             
             elif file_ext in [".alaw", ".ulaw"]:
                 # Читаем A-law или μ-law файлы
