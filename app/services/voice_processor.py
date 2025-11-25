@@ -341,7 +341,7 @@ class VoiceProcessor:
     
     async def _send_audio_to_asterisk(self, pcm16_data: bytes):
         """
-        Send PCM16 audio to Asterisk channel through ARI using WAV file with PCM16LE format
+        Save PCM16 8kHz audio as SLIN16 raw file (.sln16) and play via Asterisk ARI
         
         Args:
             pcm16_data: PCM16 (16-bit, little-endian) audio data (8kHz, mono)
@@ -352,16 +352,15 @@ class VoiceProcessor:
         
         try:
             import uuid
-            import wave
             
             # Создаем уникальное имя файла
             file_id = str(uuid.uuid4())[:8]
-            wav_filename = f"tts_{file_id}"
+            slin_filename = f"tts_{file_id}"
             
             # ИСПРАВЛЕНО: Asterisk ищет звуки в /usr/share/asterisk/sounds (Data directory)
             # НЕ в /var/lib/asterisk/sounds (VarLib directory)
             sounds_dir = "/usr/share/asterisk/sounds"
-            wav_path = f"{sounds_dir}/{wav_filename}.wav"
+            slin_path = f"{sounds_dir}/{slin_filename}.sln16"
             
             # Создаем директорию если её нет
             os.makedirs(sounds_dir, exist_ok=True)
@@ -372,30 +371,25 @@ class VoiceProcessor:
             except Exception as e:
                 logger.warning(f"Failed to set directory permissions: {e}")
             
-            # Создаем WAV файл с PCM16LE форматом (16-bit, mono, 8kHz)
-            # Asterisk поддерживает только PCM16LE в WAV, не PCMU
-            with wave.open(wav_path, 'wb') as wav_file:
-                wav_file.setnchannels(1)      # Mono
-                wav_file.setsampwidth(2)     # 16-bit (2 bytes per sample)
-                wav_file.setframerate(8000)   # 8kHz
-                wav_file.writeframes(pcm16_data)  # PCM16LE data
-            
-            logger.info(f"✅ Created WAV file (PCM16LE): {wav_path} ({len(pcm16_data)} bytes PCM16, 8kHz, mono)")
+            # SLIN16 = raw PCM16LE, 8000 Hz, mono, без заголовка
+            # Просто записываем байты PCM16 напрямую
+            with open(slin_path, 'wb') as f:
+                f.write(pcm16_data)
             
             # Проверяем, что файл создался
-            if not os.path.exists(wav_path):
-                raise FileNotFoundError(f"Failed to create WAV file: {wav_path}")
+            if not os.path.exists(slin_path):
+                raise FileNotFoundError(f"Failed to create SLIN16 file: {slin_path}")
             
-            # Устанавливаем права на файл (чтение для всех, запись для владельца)
+            # Устанавливаем права на файл
             try:
-                os.chmod(wav_path, 0o644)
+                os.chmod(slin_path, 0o644)
                 # Если Asterisk работает от пользователя asterisk, меняем владельца
                 try:
                     import pwd
                     import grp
                     asterisk_uid = pwd.getpwnam('asterisk').pw_uid
                     asterisk_gid = grp.getgrnam('asterisk').gr_gid
-                    os.chown(wav_path, asterisk_uid, asterisk_gid)
+                    os.chown(slin_path, asterisk_uid, asterisk_gid)
                     logger.debug(f"Changed file owner to asterisk:asterisk")
                 except (KeyError, OSError) as e:
                     # Если пользователь asterisk не существует, оставляем как есть
@@ -403,16 +397,16 @@ class VoiceProcessor:
             except Exception as e:
                 logger.warning(f"Failed to set file permissions: {e}")
             
-            file_size = os.path.getsize(wav_path)
-            logger.info(f"WAV file size: {file_size} bytes")
+            file_size = os.path.getsize(slin_path)
+            logger.info(f"✅ Created SLIN16 file: {slin_path} ({file_size} bytes PCM16, 8kHz, mono)")
             
-            # ИСПРАВЛЕНО: Используем имя файла без поддиректории
-            # Asterisk автоматически найдет файл с расширением .wav в основной директории sounds/
-            # Формат: sound:filename (без расширения, без поддиректории)
-            media_uri = f"sound:{wav_filename}"
+            # ИСПРАВЛЕНО: Используем имя файла без расширения
+            # Asterisk автоматически найдет файл с расширением .sln16
+            # Формат: sound:filename (без расширения)
+            media_uri = f"sound:{slin_filename}"
             
-            logger.info(f"Sending audio to Asterisk: {media_uri} ({len(pcm16_data)} bytes PCM16, {file_size} bytes WAV)")
-            logger.info(f"File path: {wav_path}")
+            logger.info(f"Sending audio to Asterisk: {media_uri} ({len(pcm16_data)} bytes PCM16, {file_size} bytes SLIN16)")
+            logger.info(f"File path: {slin_path}")
             
             try:
                 playback_info = await self.ari_client.play_media(
@@ -430,14 +424,14 @@ class VoiceProcessor:
             # async def cleanup():
             #     await asyncio.sleep(20)  # Ждем 20 секунд
             #     try:
-            #         if os.path.exists(wav_path):
-            #             os.unlink(wav_path)
-            #             logger.debug(f"Cleaned up temporary file: {wav_path}")
+            #         if os.path.exists(slin_path):
+            #             os.unlink(slin_path)
+            #             logger.debug(f"Cleaned up temporary file: {slin_path}")
             #     except Exception as e:
             #         logger.warning(f"Failed to cleanup temp file: {e}")
             # 
             # asyncio.create_task(cleanup())
-            logger.info(f"⚠️ File cleanup DISABLED - file will remain: {wav_path}")
+            logger.info(f"⚠️ File cleanup DISABLED - file will remain: {slin_path}")
             
         except Exception as e:
             logger.error(f"Failed to send audio to Asterisk: {e}", exc_info=True)
