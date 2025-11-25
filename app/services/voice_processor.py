@@ -466,18 +466,20 @@ class VoiceProcessor:
                 logger.error(f"Failed to play media: {play_error}", exc_info=True)
                 raise
             
+            # ВРЕМЕННО ОТКЛЮЧЕНО: Удаление файлов для проверки
             # Удаляем временный файл после небольшой задержки
             # (даем время Asterisk прочитать файл)
-            async def cleanup():
-                await asyncio.sleep(20)  # Ждем 20 секунд
-                try:
-                    if os.path.exists(wav_path):
-                        os.unlink(wav_path)
-                        logger.debug(f"Cleaned up temporary file: {wav_path}")
-                except Exception as e:
-                    logger.warning(f"Failed to cleanup temp file: {e}")
-            
-            asyncio.create_task(cleanup())
+            # async def cleanup():
+            #     await asyncio.sleep(20)  # Ждем 20 секунд
+            #     try:
+            #         if os.path.exists(wav_path):
+            #             os.unlink(wav_path)
+            #             logger.debug(f"Cleaned up temporary file: {wav_path}")
+            #     except Exception as e:
+            #         logger.warning(f"Failed to cleanup temp file: {e}")
+            # 
+            # asyncio.create_task(cleanup())
+            logger.info(f"⚠️ File cleanup DISABLED - file will remain: {wav_path}")
             
         except Exception as e:
             logger.error(f"Failed to send audio to Asterisk: {e}", exc_info=True)
