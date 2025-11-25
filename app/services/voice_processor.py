@@ -394,9 +394,9 @@ class VoiceProcessor:
             file_id = str(uuid.uuid4())[:8]
             wav_filename = f"tts_{file_id}"
             
-            # ИСПРАВЛЕНО: Используем основную директорию sounds, не поддиректорию
-            # Asterisk может не видеть поддиректории в sounds/
-            sounds_dir = "/var/lib/asterisk/sounds"
+            # ИСПРАВЛЕНО: Asterisk ищет звуки в /usr/share/asterisk/sounds (Data directory)
+            # НЕ в /var/lib/asterisk/sounds (VarLib directory)
+            sounds_dir = "/usr/share/asterisk/sounds"
             wav_path = f"{sounds_dir}/{wav_filename}.wav"
             
             # Создаем директорию если её нет
