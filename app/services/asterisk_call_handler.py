@@ -182,8 +182,8 @@ class AsteriskCallHandler:
             recording_started = False
             recording_format = None
             
-            # Пробуем разные форматы по очереди
-            for fmt in ["gsm", "alaw", "ulaw", "wav"]:
+            # Пробуем разные форматы по очереди (wav и alaw/ulaw поддерживаются лучше, чем gsm)
+            for fmt in ["wav", "alaw", "ulaw", "gsm"]:
                 try:
                     await self.ari.start_recording(
                         channel_id=channel_id,
@@ -549,6 +549,14 @@ class AsteriskCallHandler:
                             logger.debug(f"Error reading chunk: {read_error}")
                             await asyncio.sleep(0.1)
                             continue
+            elif file_ext == ".gsm":
+                # GSM формат - конвертируем через sox или пропускаем
+                # Для простоты, просто логируем и пропускаем
+                logger.warning(f"GSM format recording detected but not fully supported. File: {recording_path}")
+                logger.warning(f"Consider using 'wav' or 'alaw'/'ulaw' formats for better compatibility.")
+                # Можно добавить конвертацию через sox: sox input.gsm -t wav - | ...
+                # Но для простоты просто пропускаем
+                return
             else:
                 logger.error(f"Unsupported recording format: {file_ext}")
         

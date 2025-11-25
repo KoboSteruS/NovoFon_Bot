@@ -347,6 +347,14 @@ class VoiceProcessor:
             file_size = os.path.getsize(slin_path)
             logger.info(f"✅ Created SLIN16 file: {slin_path} ({file_size} bytes PCM16, 16kHz, mono)")
             
+            # Проверяем, что файл действительно существует и доступен для чтения
+            if not os.access(slin_path, os.R_OK):
+                raise PermissionError(f"File {slin_path} is not readable")
+            
+            # Проверяем размер файла (должен быть > 0)
+            if file_size == 0:
+                raise ValueError(f"SLIN16 file is empty: {slin_path}")
+            
             # ИСПРАВЛЕНО: Используем имя файла без расширения
             # Asterisk автоматически найдет файл с расширением .sln16
             # Формат: sound:filename (без расширения)
@@ -354,6 +362,10 @@ class VoiceProcessor:
             
             logger.info(f"Sending audio to Asterisk: {media_uri} ({len(pcm16_data)} bytes PCM16, {file_size} bytes SLIN16)")
             logger.info(f"File path: {slin_path}")
+            logger.info(f"File exists: {os.path.exists(slin_path)}, readable: {os.access(slin_path, os.R_OK)}")
+            
+            # Небольшая задержка, чтобы убедиться, что файл записан на диск
+            await asyncio.sleep(0.1)
             
             try:
                 playback_info = await self.ari_client.play_media(
@@ -363,6 +375,12 @@ class VoiceProcessor:
                 logger.info(f"✅ Audio playback started: {playback_info.get('id', 'unknown')}")
             except Exception as play_error:
                 logger.error(f"Failed to play media: {play_error}", exc_info=True)
+                # Проверяем, существует ли файл после ошибки
+                if os.path.exists(slin_path):
+                    logger.error(f"File exists but playback failed. File size: {os.path.getsize(slin_path)} bytes")
+                    logger.error(f"File permissions: {oct(os.stat(slin_path).st_mode)}")
+                else:
+                    logger.error(f"File does not exist: {slin_path}")
                 raise
             
             # ВРЕМЕННО ОТКЛЮЧЕНО: Удаление файлов для проверки
