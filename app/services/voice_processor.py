@@ -377,10 +377,10 @@ class VoiceProcessor:
     
     async def _send_audio_to_asterisk(self, pcmu_data: bytes):
         """
-        Send PCMU audio to Asterisk channel through ARI using raw .ulaw file
+        Send PCMU audio to Asterisk channel through ARI using WAV file with PCMU format
         
         Args:
-            pcmu_data: PCMU (μ-law) encoded audio data (8kHz)
+            pcmu_data: PCMU (μ-law) encoded audio data (8kHz, mono)
         """
         if not self.ari_client:
             logger.warning("ARI client not available, cannot send audio to Asterisk")
@@ -388,71 +388,92 @@ class VoiceProcessor:
         
         try:
             import uuid
+            import struct
             
             # Создаем уникальное имя файла
             file_id = str(uuid.uuid4())[:8]
-            ulaw_filename = f"tts_{file_id}"
+            wav_filename = f"tts_{file_id}"
             
             # Путь к директории звуков Asterisk
-            # Asterisk ищет файлы в /var/lib/asterisk/sounds/ по умолчанию
-            # Можно использовать поддиректорию tts/
             sounds_dir = "/var/lib/asterisk/sounds/tts"
-            ulaw_path = f"{sounds_dir}/{ulaw_filename}.ulaw"
+            wav_path = f"{sounds_dir}/{wav_filename}.wav"
             
             # Создаем директорию если её нет
             os.makedirs(sounds_dir, exist_ok=True)
             
-            # Записываем raw PCMU данные в .ulaw файл
-            # Asterisk понимает raw .ulaw файлы напрямую (8kHz, mono, μ-law)
-            with open(ulaw_path, 'wb') as f:
-                f.write(pcmu_data)
+            # Создаем WAV файл с PCMU (μ-law) форматом
+            # WAV header для PCMU: format 7, 8kHz, mono, 8-bit
+            sample_rate = 8000
+            num_channels = 1
+            bits_per_sample = 8
+            byte_rate = sample_rate * num_channels * bits_per_sample // 8
+            block_align = num_channels * bits_per_sample // 8
+            data_size = len(pcmu_data)
+            
+            # WAV file structure
+            # RIFF header
+            wav_file = b'RIFF'
+            file_size = 36 + data_size  # 36 = header size without data
+            wav_file += struct.pack('<I', file_size)
+            wav_file += b'WAVE'
+            
+            # fmt chunk (18 bytes for PCMU)
+            wav_file += b'fmt '
+            wav_file += struct.pack('<I', 18)  # fmt chunk size
+            wav_file += struct.pack('<H', 7)   # Audio format: 7 = μ-law (PCMU)
+            wav_file += struct.pack('<H', num_channels)  # Channels: 1 = mono
+            wav_file += struct.pack('<I', sample_rate)  # Sample rate: 8000
+            wav_file += struct.pack('<I', byte_rate)  # Byte rate
+            wav_file += struct.pack('<H', block_align)  # Block align
+            wav_file += struct.pack('<H', bits_per_sample)  # Bits per sample: 8
+            wav_file += struct.pack('<H', 0)  # Extension size (0 for PCMU)
+            
+            # data chunk
+            wav_file += b'data'
+            wav_file += struct.pack('<I', data_size)
+            wav_file += pcmu_data  # Raw PCMU data
+            
+            # Записываем WAV файл
+            with open(wav_path, 'wb') as f:
+                f.write(wav_file)
             
             # Проверяем, что файл создался
-            if not os.path.exists(ulaw_path):
-                raise FileNotFoundError(f"Failed to create ULAW file: {ulaw_path}")
+            if not os.path.exists(wav_path):
+                raise FileNotFoundError(f"Failed to create WAV file: {wav_path}")
             
-            file_size = os.path.getsize(ulaw_path)
-            if file_size != len(pcmu_data):
-                raise ValueError(f"File size mismatch: expected {len(pcmu_data)}, got {file_size}")
+            file_size = os.path.getsize(wav_path)
+            expected_size = 44 + data_size  # 44 = WAV header size
+            if file_size != expected_size:
+                logger.warning(f"File size mismatch: expected {expected_size}, got {file_size}")
             
-            logger.info(f"✅ Created ULAW file: {ulaw_path} ({file_size} bytes PCMU)")
+            logger.info(f"✅ Created WAV file (PCMU): {wav_path} ({file_size} bytes, {data_size} bytes PCMU data)")
             
             # Отправляем в Asterisk через sound: URI
-            # Asterisk автоматически найдет файл с расширением .ulaw
+            # Asterisk автоматически найдет файл с расширением .wav
             # Формат: sound:tts/filename (без расширения)
-            media_uri = f"sound:tts/{ulaw_filename}"
+            media_uri = f"sound:tts/{wav_filename}"
             
-            logger.info(f"Sending audio to Asterisk: {media_uri} ({len(pcmu_data)} bytes PCMU)")
-            logger.info(f"File path: {ulaw_path}")
+            logger.info(f"Sending audio to Asterisk: {media_uri} ({data_size} bytes PCMU, {file_size} bytes WAV)")
+            logger.info(f"File path: {wav_path}")
             
             try:
-                await self.ari_client.play_media(
+                playback_info = await self.ari_client.play_media(
                     channel_id=self.channel_id,
                     media=media_uri
                 )
-                logger.info(f"✅ Audio sent to Asterisk channel {self.channel_id}")
+                logger.info(f"✅ Audio playback started: {playback_info.get('id', 'unknown')}")
             except Exception as play_error:
-                logger.error(f"Failed to play media: {play_error}")
-                # Пробуем альтернативный формат - с полным путем
-                logger.info(f"Trying alternative format: sound:{ulaw_filename}")
-                try:
-                    await self.ari_client.play_media(
-                        channel_id=self.channel_id,
-                        media=f"sound:{ulaw_filename}"
-                    )
-                    logger.info(f"✅ Audio sent via alternative format")
-                except Exception as alt_error:
-                    logger.error(f"Alternative format also failed: {alt_error}")
-                    raise
+                logger.error(f"Failed to play media: {play_error}", exc_info=True)
+                raise
             
             # Удаляем временный файл после небольшой задержки
             # (даем время Asterisk прочитать файл)
             async def cleanup():
-                await asyncio.sleep(15)  # Ждем 15 секунд (больше для надежности)
+                await asyncio.sleep(20)  # Ждем 20 секунд
                 try:
-                    if os.path.exists(ulaw_path):
-                        os.unlink(ulaw_path)
-                        logger.debug(f"Cleaned up temporary file: {ulaw_path}")
+                    if os.path.exists(wav_path):
+                        os.unlink(wav_path)
+                        logger.debug(f"Cleaned up temporary file: {wav_path}")
                 except Exception as e:
                     logger.warning(f"Failed to cleanup temp file: {e}")
             
