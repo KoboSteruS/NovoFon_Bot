@@ -156,8 +156,31 @@ class AsteriskCallHandler:
             # Step 5.5: Start receiving RTP audio from channel
             # Пробуем разные форматы записи
             logger.info(f"5.5️⃣ Starting audio recording for channel {channel_id}...")
+            
+            # Создаем директорию для записей, если её нет
+            recording_dir = "/var/spool/asterisk/recording"
+            try:
+                import pwd
+                import grp
+                os.makedirs(recording_dir, exist_ok=True)
+                # Устанавливаем права на директорию
+                os.chmod(recording_dir, 0o755)
+                # Пытаемся установить владельца на asterisk:asterisk
+                try:
+                    asterisk_uid = pwd.getpwnam('asterisk').pw_uid
+                    asterisk_gid = grp.getgrnam('asterisk').gr_gid
+                    os.chown(recording_dir, asterisk_uid, asterisk_gid)
+                    logger.debug(f"Created recording directory: {recording_dir} (owner: asterisk:asterisk)")
+                except (KeyError, OSError) as e:
+                    logger.warning(f"Could not set recording directory owner to asterisk: {e}")
+                    logger.warning(f"Directory created but owner not changed. You may need to run: sudo chown asterisk:asterisk {recording_dir}")
+            except Exception as e:
+                logger.warning(f"Failed to create recording directory {recording_dir}: {e}")
+                logger.warning(f"You may need to create it manually: sudo mkdir -p {recording_dir} && sudo chown asterisk:asterisk {recording_dir}")
+            
             recording_name = f"channel_{channel_id}_audio"
             recording_started = False
+            recording_format = None
             
             # Пробуем разные форматы по очереди
             for fmt in ["gsm", "alaw", "ulaw", "wav"]:
@@ -169,6 +192,7 @@ class AsteriskCallHandler:
                     )
                     logger.info(f"✅ Audio recording started for channel {channel_id} with format {fmt}")
                     recording_started = True
+                    recording_format = fmt
                     break
                 except Exception as e:
                     logger.debug(f"Failed to start recording with format {fmt}: {e}")
@@ -176,7 +200,7 @@ class AsteriskCallHandler:
             
             if recording_started:
                 # Запускаем задачу для чтения аудио из записи
-                asyncio.create_task(self._read_audio_from_recording(channel_id, recording_name))
+                asyncio.create_task(self._read_audio_from_recording(channel_id, recording_name, recording_format))
             else:
                 logger.error(f"❌ Failed to start audio recording with any format - audio input will not work!")
                 logger.error(f"   This means the bot will not hear user speech. Check Asterisk recording configuration.")
@@ -366,13 +390,14 @@ class AsteriskCallHandler:
         else:
             logger.warning(f"No voice processor for {channel_id}")
     
-    async def _read_audio_from_recording(self, channel_id: str, recording_name: str):
+    async def _read_audio_from_recording(self, channel_id: str, recording_name: str, recording_format: str = None):
         """
         Read audio from recording and send to voice processor
         
         Args:
             channel_id: Channel ID
             recording_name: Recording name
+            recording_format: Format of the recording (e.g., "wav", "gsm", "alaw", "ulaw")
         """
         processor = self.voice_manager.get_processor(channel_id)
         if not processor:
@@ -380,28 +405,44 @@ class AsteriskCallHandler:
             return
         
         try:
-            # Пробуем найти файл записи с разными расширениями
+            # Пробуем найти файл записи
             recording_dir = "/var/spool/asterisk/recording"
-            possible_extensions = [".wav", ".gsm", ".alaw", ".ulaw"]
             recording_path = None
             
-            # Ждем пока файл появится
-            max_wait = 10
-            waited = 0
-            while waited < max_wait:
-                for ext in possible_extensions:
-                    test_path = f"{recording_dir}/{recording_name}{ext}"
+            # Если формат известен, пробуем сначала его
+            if recording_format:
+                # Asterisk создает файлы как {name}.{format}
+                test_path = f"{recording_dir}/{recording_name}.{recording_format}"
+                if os.path.exists(test_path):
+                    recording_path = test_path
+                else:
+                    # Пробуем с точкой перед расширением
+                    test_path = f"{recording_dir}/{recording_name}.{recording_format}"
                     if os.path.exists(test_path):
                         recording_path = test_path
+            
+            # Если не нашли, пробуем все возможные расширения
+            if not recording_path:
+                possible_extensions = [".wav", ".gsm", ".alaw", ".ulaw"]
+                # Ждем пока файл появится
+                max_wait = 10
+                waited = 0
+                while waited < max_wait:
+                    for ext in possible_extensions:
+                        test_path = f"{recording_dir}/{recording_name}{ext}"
+                        if os.path.exists(test_path):
+                            recording_path = test_path
+                            break
+                    if recording_path:
                         break
-                if recording_path:
-                    break
-                await asyncio.sleep(0.5)
-                waited += 0.5
+                    await asyncio.sleep(0.5)
+                    waited += 0.5
             
             if not recording_path:
                 logger.error(f"❌ Recording file not found in {recording_dir} with name {recording_name}")
-                logger.error(f"   Tried extensions: {possible_extensions}")
+                if recording_format:
+                    logger.error(f"   Expected format: {recording_format}")
+                logger.error(f"   Check if Asterisk has write permissions to {recording_dir}")
                 return
             
             logger.info(f"Reading audio from recording: {recording_path}")
