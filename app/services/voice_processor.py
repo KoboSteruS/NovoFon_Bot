@@ -394,12 +394,19 @@ class VoiceProcessor:
             file_id = str(uuid.uuid4())[:8]
             wav_filename = f"tts_{file_id}"
             
-            # Путь к директории звуков Asterisk
-            sounds_dir = "/var/lib/asterisk/sounds/tts"
+            # ИСПРАВЛЕНО: Используем основную директорию sounds, не поддиректорию
+            # Asterisk может не видеть поддиректории в sounds/
+            sounds_dir = "/var/lib/asterisk/sounds"
             wav_path = f"{sounds_dir}/{wav_filename}.wav"
             
             # Создаем директорию если её нет
             os.makedirs(sounds_dir, exist_ok=True)
+            
+            # Устанавливаем права на директорию
+            try:
+                os.chmod(sounds_dir, 0o755)
+            except Exception as e:
+                logger.warning(f"Failed to set directory permissions: {e}")
             
             # Создаем WAV файл с PCMU (μ-law) форматом
             # WAV header для PCMU: format 7, 8kHz, mono, 8-bit
@@ -441,6 +448,23 @@ class VoiceProcessor:
             if not os.path.exists(wav_path):
                 raise FileNotFoundError(f"Failed to create WAV file: {wav_path}")
             
+            # Устанавливаем права на файл (чтение для всех, запись для владельца)
+            try:
+                os.chmod(wav_path, 0o644)
+                # Если Asterisk работает от пользователя asterisk, меняем владельца
+                try:
+                    import pwd
+                    import grp
+                    asterisk_uid = pwd.getpwnam('asterisk').pw_uid
+                    asterisk_gid = grp.getgrnam('asterisk').gr_gid
+                    os.chown(wav_path, asterisk_uid, asterisk_gid)
+                    logger.debug(f"Changed file owner to asterisk:asterisk")
+                except (KeyError, OSError) as e:
+                    # Если пользователь asterisk не существует, оставляем как есть
+                    logger.debug(f"Could not change file owner: {e}")
+            except Exception as e:
+                logger.warning(f"Failed to set file permissions: {e}")
+            
             file_size = os.path.getsize(wav_path)
             expected_size = 44 + data_size  # 44 = WAV header size
             if file_size != expected_size:
@@ -448,10 +472,10 @@ class VoiceProcessor:
             
             logger.info(f"✅ Created WAV file (PCMU): {wav_path} ({file_size} bytes, {data_size} bytes PCMU data)")
             
-            # Отправляем в Asterisk через sound: URI
-            # Asterisk автоматически найдет файл с расширением .wav
-            # Формат: sound:tts/filename (без расширения)
-            media_uri = f"sound:tts/{wav_filename}"
+            # ИСПРАВЛЕНО: Используем имя файла без поддиректории
+            # Asterisk автоматически найдет файл с расширением .wav в основной директории sounds/
+            # Формат: sound:filename (без расширения, без поддиректории)
+            media_uri = f"sound:{wav_filename}"
             
             logger.info(f"Sending audio to Asterisk: {media_uri} ({data_size} bytes PCMU, {file_size} bytes WAV)")
             logger.info(f"File path: {wav_path}")
