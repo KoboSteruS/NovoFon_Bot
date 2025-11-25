@@ -473,6 +473,29 @@ class AudioConverter:
     """
     
     @staticmethod
+    def pcma_to_pcm16(pcma_data: bytes) -> bytes:
+        """
+        Convert PCMA (A-law) to PCM16
+        
+        Args:
+            pcma_data: PCMA audio data (8-bit A-law)
+        
+        Returns:
+            PCM16 audio data (16-bit linear)
+        """
+        import audioop
+        
+        if not pcma_data:
+            raise ValueError("Empty PCMA data")
+        
+        try:
+            # A-law to linear PCM16
+            return audioop.alaw2lin(pcma_data, 2)
+        except Exception as e:
+            logger.error(f"PCMA to PCM16 conversion failed: {e}, data_size={len(pcma_data)}")
+            raise
+    
+    @staticmethod
     def pcmu_to_pcm16(pcmu_data: bytes) -> bytes:
         """
         Convert μ-law (PCMU) to PCM 16-bit

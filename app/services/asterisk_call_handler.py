@@ -154,25 +154,32 @@ class AsteriskCallHandler:
             logger.info(f"✅ Voice processing started for channel {channel_id}")
             
             # Step 5.5: Start receiving RTP audio from channel
-            # Используем запись канала для получения аудио в реальном времени
+            # Пробуем разные форматы записи
             logger.info(f"5.5️⃣ Starting audio recording for channel {channel_id}...")
-            try:
-                # Запускаем запись канала для получения аудио
-                # Используем wav формат (поддерживается везде)
-                recording_name = f"channel_{channel_id}_audio"
-                await self.ari.start_recording(
-                    channel_id=channel_id,
-                    name=recording_name,
-                    format="wav"  # WAV формат поддерживается везде
-                )
-                logger.info(f"✅ Audio recording started for channel {channel_id}")
-                
+            recording_name = f"channel_{channel_id}_audio"
+            recording_started = False
+            
+            # Пробуем разные форматы по очереди
+            for fmt in ["gsm", "alaw", "ulaw", "wav"]:
+                try:
+                    await self.ari.start_recording(
+                        channel_id=channel_id,
+                        name=recording_name,
+                        format=fmt
+                    )
+                    logger.info(f"✅ Audio recording started for channel {channel_id} with format {fmt}")
+                    recording_started = True
+                    break
+                except Exception as e:
+                    logger.debug(f"Failed to start recording with format {fmt}: {e}")
+                    continue
+            
+            if recording_started:
                 # Запускаем задачу для чтения аудио из записи
                 asyncio.create_task(self._read_audio_from_recording(channel_id, recording_name))
-            except Exception as e:
-                logger.warning(f"Failed to start audio recording: {e}, will try alternative method")
-                # Альтернативный метод - используем ExternalMedia если доступен
-                # Но для простоты пока пропускаем, если запись не работает
+            else:
+                logger.error(f"❌ Failed to start audio recording with any format - audio input will not work!")
+                logger.error(f"   This means the bot will not hear user speech. Check Asterisk recording configuration.")
             
             # Step 6: Start dialogue - FSM will handle greeting
             logger.info(f"6️⃣ Starting dialogue for call {call_id}...")
@@ -373,29 +380,41 @@ class AsteriskCallHandler:
             return
         
         try:
-            # Читаем аудио из записи в реальном времени
-            # Запись находится в /var/spool/asterisk/recording/{recording_name}.wav
-            recording_path = f"/var/spool/asterisk/recording/{recording_name}.wav"
+            # Пробуем найти файл записи с разными расширениями
+            recording_dir = "/var/spool/asterisk/recording"
+            possible_extensions = [".wav", ".gsm", ".alaw", ".ulaw"]
+            recording_path = None
             
             # Ждем пока файл появится
             max_wait = 10
             waited = 0
-            while not os.path.exists(recording_path) and waited < max_wait:
+            while waited < max_wait:
+                for ext in possible_extensions:
+                    test_path = f"{recording_dir}/{recording_name}{ext}"
+                    if os.path.exists(test_path):
+                        recording_path = test_path
+                        break
+                if recording_path:
+                    break
                 await asyncio.sleep(0.5)
                 waited += 0.5
             
-            if not os.path.exists(recording_path):
-                logger.warning(f"Recording file not found: {recording_path}")
+            if not recording_path:
+                logger.error(f"❌ Recording file not found in {recording_dir} with name {recording_name}")
+                logger.error(f"   Tried extensions: {possible_extensions}")
                 return
             
             logger.info(f"Reading audio from recording: {recording_path}")
             
-            # Читаем WAV файл и извлекаем PCM16 данные
-            import wave
-            import struct
+            # Определяем формат по расширению
+            file_ext = os.path.splitext(recording_path)[1].lower()
             
-            # Открываем WAV файл для чтения
-            with wave.open(recording_path, 'rb') as wav_file:
+            if file_ext == ".wav":
+                # Читаем WAV файл
+                import wave
+                import struct
+                
+                with wave.open(recording_path, 'rb') as wav_file:
                 # Проверяем формат
                 sample_rate = wav_file.getframerate()
                 channels = wav_file.getnchannels()
@@ -446,6 +465,51 @@ class AsteriskCallHandler:
                     await processor.receive_rtp_audio(frames, codec="l16")
                     
                     await asyncio.sleep(0.05)  # Небольшая задержка
+            
+            elif file_ext in [".alaw", ".ulaw"]:
+                # Читаем A-law или μ-law файлы
+                from app.services.elevenlabs_client import AudioConverter
+                import audioop
+                
+                chunk_size = 160  # 20ms при 8kHz (160 байт для alaw/ulaw)
+                last_size = 0
+                
+                with open(recording_path, 'rb') as f:
+                    while processor.is_running:
+                        try:
+                            current_size = os.path.getsize(recording_path)
+                            if current_size <= last_size:
+                                await asyncio.sleep(0.1)
+                                continue
+                            
+                            # Читаем новые данные
+                            f.seek(last_size)
+                            chunk = f.read(chunk_size * 10)  # Читаем больше для буфера
+                            if not chunk:
+                                await asyncio.sleep(0.1)
+                                continue
+                            
+                            last_size = f.tell()
+                            
+                            # Конвертируем в PCM16
+                            if file_ext == ".alaw":
+                                pcm16 = audioop.alaw2lin(chunk, 2)
+                            elif file_ext == ".ulaw":
+                                pcm16 = audioop.ulaw2lin(chunk, 2)
+                            else:
+                                continue
+                            
+                            # Ресемплим на 16kHz
+                            pcm16_16khz = AudioConverter.resample_pcm16(pcm16, 8000, 16000)
+                            
+                            await processor.receive_rtp_audio(pcm16_16khz, codec="l16")
+                            await asyncio.sleep(0.05)
+                        except Exception as read_error:
+                            logger.debug(f"Error reading chunk: {read_error}")
+                            await asyncio.sleep(0.1)
+                            continue
+            else:
+                logger.error(f"Unsupported recording format: {file_ext}")
         
         except Exception as e:
             logger.error(f"Error reading audio from recording: {e}", exc_info=True)
