@@ -198,10 +198,10 @@ class VoiceProcessor:
         logger.info(f"Streaming: {streaming}")
         
         try:
-            # Пробуем запросить pcm_8000 напрямую от ElevenLabs (если поддерживается)
-            # Если нет - используем pcm_16000 и ресемплим
-            output_format = "pcm_8000"  # Попробуем получить 8kHz напрямую
-            use_8khz_direct = True
+            # ИСПРАВЛЕНО: Используем 16kHz для SLIN16 (Asterisk ожидает 16kHz по умолчанию)
+            # 8kHz вызывает писклявость и ускорение, т.к. Asterisk воспроизводит как 16kHz
+            output_format = "pcm_16000"  # Всегда используем 16kHz для SLIN16
+            use_8khz_direct = False
             
             if streaming:
                 # Streaming TTS - накапливаем чанки и обрабатываем
@@ -221,34 +221,13 @@ class VoiceProcessor:
                     
                     # Конвертируем в bytes и обрабатываем
                     full_audio = bytes(audio_buffer)
-                    if use_8khz_direct and output_format == "pcm_8000":
-                        logger.info(f"Total audio received: {len(full_audio)} bytes (PCM16, 8kHz)")
-                    else:
-                        logger.info(f"Total audio received: {len(full_audio)} bytes (PCM16, 16kHz)")
+                    logger.info(f"Total audio received: {len(full_audio)} bytes (PCM16, 16kHz)")
                     
                 except Exception as e:
                     logger.error(f"Failed to get TTS audio: {e}", exc_info=True)
-                    # Если pcm_8000 не поддерживается - пробуем pcm_16000
-                    if use_8khz_direct and output_format == "pcm_8000":
-                        logger.warning(f"pcm_8000 not supported, falling back to pcm_16000: {e}")
-                        output_format = "pcm_16000"
-                        use_8khz_direct = False
-                        audio_buffer = bytearray()
-                        async for audio_chunk in self.tts_client.text_to_speech_stream(
-                            text,
-                            output_format=output_format
-                        ):
-                            if audio_chunk:
-                                audio_buffer.extend(audio_chunk)
-                        if audio_buffer:
-                            full_audio = bytes(audio_buffer)
-                            logger.info(f"Total audio received: {len(full_audio)} bytes (PCM16, 16kHz)")
-                        else:
-                            raise ValueError("No audio chunks received after fallback")
-                    else:
-                        raise
+                    raise
                 
-                # Обрабатываем аудио: готовим PCM16 для WAV файла
+                # Обрабатываем аудио: готовим PCM16 для SLIN16 файла
                 try:
                     # Убеждаемся, что размер кратен 2 байтам (16-bit PCM)
                     if len(full_audio) % 2 != 0:
@@ -258,29 +237,16 @@ class VoiceProcessor:
                     if len(full_audio) < 2:
                         raise ValueError(f"Audio too short: {len(full_audio)} bytes")
                     
-                    # Если получили pcm_16000 - ресемплим на 8kHz
-                    if not use_8khz_direct or output_format != "pcm_8000":
-                        # Ресемплим с 16kHz на 8kHz
-                        logger.info(f"Resampling from 16kHz to 8kHz...")
-                        full_audio = AudioConverter.resample_pcm16(full_audio, 16000, 8000)
-                        logger.info(f"Resampled audio: {len(full_audio)} bytes (PCM16, 8kHz)")
+                    # ИСПРАВЛЕНО: Используем 16kHz напрямую (не ресемплим)
+                    # Asterisk ожидает 16kHz для SLIN16, ресемплинг на 8kHz вызывает писклявость
+                    logger.info(f"PCM16 audio ready: {len(full_audio)} bytes (PCM16, 16kHz)")
                     
-                    logger.info(f"PCM16 audio ready: {len(full_audio)} bytes (PCM16, 8kHz)")
-                    
-                    # Отправляем в Asterisk через ARI (PCM16, не PCMU)
+                    # Отправляем в Asterisk через ARI (PCM16, 16kHz для SLIN16)
                     await self._send_audio_to_asterisk(full_audio)
                     
                 except Exception as e:
                     logger.error(f"Error processing audio: {e}", exc_info=True)
-                    # Если pcm_8000 не поддерживается - пробуем pcm_16000
-                    if use_8khz_direct and output_format == "pcm_8000":
-                        logger.warning(f"pcm_8000 not supported, falling back to pcm_16000: {e}")
-                        output_format = "pcm_16000"
-                        use_8khz_direct = False
-                        # Повторяем запрос с pcm_16000
-                        raise  # Пока просто пробрасываем ошибку, можно добавить retry логику
-                    else:
-                        raise
+                    raise
             
             else:
                 # Non-streaming TTS - wait for complete audio
@@ -289,26 +255,12 @@ class VoiceProcessor:
                         text,
                         output_format=output_format
                     )
-                    if use_8khz_direct and output_format == "pcm_8000":
-                        logger.info(f"Total audio received: {len(audio_data)} bytes (PCM16, 8kHz)")
-                    else:
-                        logger.info(f"Total audio received: {len(audio_data)} bytes (PCM16, 16kHz)")
+                    logger.info(f"Total audio received: {len(audio_data)} bytes (PCM16, 16kHz)")
                 except Exception as e:
                     logger.error(f"Failed to get TTS audio: {e}", exc_info=True)
-                    # Если pcm_8000 не поддерживается - пробуем pcm_16000
-                    if use_8khz_direct and output_format == "pcm_8000":
-                        logger.warning(f"pcm_8000 not supported, falling back to pcm_16000: {e}")
-                        output_format = "pcm_16000"
-                        use_8khz_direct = False
-                        audio_data = await self.tts_client.text_to_speech(
-                            text,
-                            output_format=output_format
-                        )
-                        logger.info(f"Total audio received: {len(audio_data)} bytes (PCM16, 16kHz)")
-                    else:
-                        raise
+                    raise
                 
-                # Обрабатываем аудио: готовим PCM16 для WAV файла
+                # Обрабатываем аудио: готовим PCM16 для SLIN16 файла
                 try:
                     # Убеждаемся, что размер кратен 2 байтам (16-bit PCM)
                     if len(audio_data) % 2 != 0:
@@ -318,16 +270,11 @@ class VoiceProcessor:
                     if len(audio_data) < 2:
                         raise ValueError(f"Audio too short: {len(audio_data)} bytes")
                     
-                    # Если получили pcm_16000 - ресемплим на 8kHz
-                    if not use_8khz_direct or output_format != "pcm_8000":
-                        # Ресемплим с 16kHz на 8kHz
-                        logger.info(f"Resampling from 16kHz to 8kHz...")
-                        audio_data = AudioConverter.resample_pcm16(audio_data, 16000, 8000)
-                        logger.info(f"Resampled audio: {len(audio_data)} bytes (PCM16, 8kHz)")
+                    # ИСПРАВЛЕНО: Используем 16kHz напрямую (не ресемплим)
+                    # Asterisk ожидает 16kHz для SLIN16, ресемплинг на 8kHz вызывает писклявость
+                    logger.info(f"PCM16 audio ready: {len(audio_data)} bytes (PCM16, 16kHz)")
                     
-                    logger.info(f"PCM16 audio ready: {len(audio_data)} bytes (PCM16, 8kHz)")
-                    
-                    # Отправляем в Asterisk через ARI (PCM16, не PCMU)
+                    # Отправляем в Asterisk через ARI (PCM16, 16kHz для SLIN16)
                     await self._send_audio_to_asterisk(audio_data)
                     
                 except Exception as e:
@@ -398,7 +345,7 @@ class VoiceProcessor:
                 logger.warning(f"Failed to set file permissions: {e}")
             
             file_size = os.path.getsize(slin_path)
-            logger.info(f"✅ Created SLIN16 file: {slin_path} ({file_size} bytes PCM16, 8kHz, mono)")
+            logger.info(f"✅ Created SLIN16 file: {slin_path} ({file_size} bytes PCM16, 16kHz, mono)")
             
             # ИСПРАВЛЕНО: Используем имя файла без расширения
             # Asterisk автоматически найдет файл с расширением .sln16
