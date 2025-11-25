@@ -158,12 +158,12 @@ class AsteriskCallHandler:
             logger.info(f"5.5️⃣ Starting audio recording for channel {channel_id}...")
             try:
                 # Запускаем запись канала для получения аудио
-                # Запись будет использоваться для чтения аудио в реальном времени
+                # Используем wav формат (поддерживается везде)
                 recording_name = f"channel_{channel_id}_audio"
                 await self.ari.start_recording(
                     channel_id=channel_id,
                     name=recording_name,
-                    format="slin16"  # Raw PCM16 для чтения в реальном времени
+                    format="wav"  # WAV формат поддерживается везде
                 )
                 logger.info(f"✅ Audio recording started for channel {channel_id}")
                 
@@ -374,11 +374,10 @@ class AsteriskCallHandler:
         
         try:
             # Читаем аудио из записи в реальном времени
-            # Запись находится в /var/spool/asterisk/recording/{recording_name}.slin16
-            recording_path = f"/var/spool/asterisk/recording/{recording_name}.slin16"
+            # Запись находится в /var/spool/asterisk/recording/{recording_name}.wav
+            recording_path = f"/var/spool/asterisk/recording/{recording_name}.wav"
             
             # Ждем пока файл появится
-            import time
             max_wait = 10
             waited = 0
             while not os.path.exists(recording_path) and waited < max_wait:
@@ -391,17 +390,60 @@ class AsteriskCallHandler:
             
             logger.info(f"Reading audio from recording: {recording_path}")
             
-            # Читаем аудио из файла в реальном времени
-            chunk_size = 3200  # 100ms при 16kHz, 16-bit mono (16000 * 2 * 0.1)
-            with open(recording_path, 'rb') as f:
+            # Читаем WAV файл и извлекаем PCM16 данные
+            import wave
+            import struct
+            
+            # Открываем WAV файл для чтения
+            with wave.open(recording_path, 'rb') as wav_file:
+                # Проверяем формат
+                sample_rate = wav_file.getframerate()
+                channels = wav_file.getnchannels()
+                sample_width = wav_file.getsampwidth()
+                
+                logger.info(f"WAV file: {sample_rate}Hz, {channels}ch, {sample_width*8}bit")
+                
+                # Читаем аудио чанками
+                chunk_frames = int(sample_rate * 0.1)  # 100ms чанки
+                
+                last_pos = 0
                 while processor.is_running:
-                    chunk = f.read(chunk_size)
-                    if not chunk:
-                        await asyncio.sleep(0.1)  # Ждем новых данных
+                    current_pos = wav_file.tell()
+                    
+                    # Если файл не изменился, ждем
+                    if current_pos == last_pos:
+                        await asyncio.sleep(0.1)
                         continue
                     
+                    last_pos = current_pos
+                    
+                    # Читаем новые данные
+                    frames = wav_file.readframes(chunk_frames)
+                    if not frames:
+                        await asyncio.sleep(0.1)
+                        continue
+                    
+                    # Если это не 16-bit PCM, пропускаем (нужна конвертация)
+                    if sample_width != 2:
+                        logger.warning(f"Unsupported sample width: {sample_width}")
+                        await asyncio.sleep(0.1)
+                        continue
+                    
+                    # Если стерео, конвертируем в моно (берем левый канал)
+                    if channels == 2:
+                        # Конвертируем стерео в моно (берем каждый второй сэмпл)
+                        pcm16_data = struct.unpack(f'<{len(frames)//2}h', frames)
+                        mono_data = pcm16_data[::2]  # Берем левый канал
+                        frames = struct.pack(f'<{len(mono_data)}h', *mono_data)
+                    
+                    # Ресемплим если нужно (обычно запись в 8kHz, нужен 16kHz)
+                    if sample_rate == 8000:
+                        # Ресемплим с 8kHz на 16kHz
+                        from app.services.elevenlabs_client import AudioConverter
+                        frames = AudioConverter.resample_pcm16(frames, 8000, 16000)
+                    
                     # Отправляем аудио в voice processor
-                    await processor.receive_rtp_audio(chunk, codec="l16")
+                    await processor.receive_rtp_audio(frames, codec="l16")
                     
                     await asyncio.sleep(0.05)  # Небольшая задержка
         
