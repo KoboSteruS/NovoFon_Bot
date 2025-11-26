@@ -299,42 +299,6 @@ class AsteriskARIClient:
             else:
                 raise AsteriskARIError(f"Failed to play media: {await resp.text()}")
     
-    async def external_media(
-        self,
-        channel_id: str,
-        app: str,
-        external_host: str,
-        format: str = "slin16"
-    ) -> Dict[str, Any]:
-        """
-        Start ExternalMedia for receiving RTP audio from channel
-        
-        Args:
-            channel_id: Channel ID
-            app: Stasis application name
-            external_host: External host for RTP (format: host:port)
-            format: Audio format (slin16, ulaw, etc.)
-        
-        Returns:
-            ExternalMedia information
-        """
-        logger.info(f"Starting ExternalMedia on channel {channel_id} to {external_host}")
-        
-        async with self.http_session.post(
-            f"{self.base_url}/channels/{channel_id}/externalMedia",
-            json={
-                'app': app,
-                'external_host': external_host,
-                'format': format
-            }
-        ) as resp:
-            if resp.status == 201:
-                return await resp.json()
-            else:
-                error_text = await resp.text()
-                logger.error(f"Failed to start ExternalMedia: {error_text}")
-                raise AsteriskARIError(f"Failed to start ExternalMedia: {error_text}")
-    
     async def start_recording(
         self,
         channel_id: str,
