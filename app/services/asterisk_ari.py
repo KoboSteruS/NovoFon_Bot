@@ -380,6 +380,105 @@ class AsteriskARIClient:
         ) as resp:
             if resp.status != 204:
                 raise AsteriskARIError(f"Failed to add channel to bridge: {await resp.text()}")
+    
+    async def external_media(
+        self,
+        app: str,
+        channel_id: str,
+        external_host: str,
+        format: str = "slin16",
+        transport: str = "udp"
+    ) -> Dict[str, Any]:
+        """
+        Create external media channel for RTP capture
+        
+        Args:
+            app: Stasis application name
+            channel_id: Channel ID for external media
+            external_host: External host:port for RTP
+            format: Audio format (slin16, pcmu, etc.)
+            transport: Transport protocol (udp, tcp)
+        
+        Returns:
+            Channel information
+        """
+        logger.info(f"Creating external media channel: {channel_id}")
+        
+        data = {
+            'app': app,
+            'external_host': external_host,
+            'format': format,
+            'transport': transport
+        }
+        
+        try:
+            async with self.http_session.post(
+                f"{self.base_url}/channels/externalMedia",
+                json=data
+            ) as resp:
+                if resp.status in [200, 201]:
+                    channel = await resp.json()
+                    logger.info(f"External media channel created: {channel.get('id')}")
+                    return channel
+                else:
+                    error = await resp.text()
+                    raise AsteriskARIError(f"Failed to create external media: {error}")
+        except Exception as e:
+            logger.error(f"Error creating external media: {e}")
+            raise AsteriskARIError(f"External media failed: {e}")
+    
+    async def snoop_channel(
+        self,
+        channel_id: str,
+        app: str,
+        spy: str = "both",
+        whisper: str = "none"
+    ) -> Dict[str, Any]:
+        """
+        Create snoop channel to monitor another channel
+        
+        Args:
+            channel_id: Channel to snoop
+            app: Stasis application name
+            spy: Direction to spy (both, in, out, none)
+            whisper: Direction to whisper (both, in, out, none)
+        
+        Returns:
+            Snoop channel information
+        """
+        logger.info(f"Creating snoop channel for {channel_id}")
+        
+        data = {
+            'app': app,
+            'spy': spy,
+            'whisper': whisper
+        }
+        
+        try:
+            async with self.http_session.post(
+                f"{self.base_url}/channels/{channel_id}/snoop",
+                json=data
+            ) as resp:
+                if resp.status in [200, 201]:
+                    channel = await resp.json()
+                    logger.info(f"Snoop channel created: {channel.get('id')}")
+                    return channel
+                else:
+                    error = await resp.text()
+                    raise AsteriskARIError(f"Failed to create snoop channel: {error}")
+        except Exception as e:
+            logger.error(f"Error creating snoop channel: {e}")
+            raise AsteriskARIError(f"Snoop channel failed: {e}")
+    
+    async def get_channel(self, channel_id: str) -> Dict[str, Any]:
+        """Get channel information"""
+        async with self.http_session.get(
+            f"{self.base_url}/channels/{channel_id}"
+        ) as resp:
+            if resp.status == 200:
+                return await resp.json()
+            else:
+                raise AsteriskARIError(f"Failed to get channel: {await resp.text()}")
 
 
 # Global client instance

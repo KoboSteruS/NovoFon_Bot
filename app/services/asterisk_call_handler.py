@@ -34,6 +34,7 @@ class AsteriskCallHandler:
         self.active_channels: Dict[str, uuid.UUID] = {}  # channel_id -> call_id mapping
         self.voice_manager = get_voice_manager()
         self.fsm_instances: Dict[str, DialogueFSM] = {}  # channel_id -> FSM mapping
+        self.media_channels: Dict[str, str] = {}  # channel_id -> media_channel_id mapping
         
         # Register event handlers
         self._register_handlers()
@@ -68,6 +69,11 @@ class AsteriskCallHandler:
         async def handle_hangup_request(event):
             """Handle hangup request"""
             await self._on_hangup_request(event)
+        
+        @self.ari.on_event('ChannelMediaReceived')
+        async def handle_media_received(event):
+            """Handle RTP audio received from channel"""
+            await self._on_media_received(event)
     
     async def _on_stasis_start(self, event: Dict):
         """
@@ -126,6 +132,22 @@ class AsteriskCallHandler:
             logger.info(f"1️⃣ Answering channel {channel_id}...")
             await self.ari.answer_channel(channel_id)
             logger.info(f"✅ Channel {channel_id} answered")
+            
+            # Step 1.5: Start snoop channel for RTP capture (external_media requires RTP server)
+            logger.info(f"1.5️⃣ Starting snoop channel for RTP capture on channel {channel_id}...")
+            try:
+                snoop_channel = await self.ari.snoop_channel(
+                    channel_id=channel_id,
+                    app=self.ari.app_name,
+                    spy="both",
+                    whisper="none"
+                )
+                snoop_id = snoop_channel.get('id')
+                self.media_channels[channel_id] = snoop_id
+                logger.info(f"✅ Snoop channel started: {snoop_id} for channel {channel_id}")
+            except Exception as snoop_error:
+                logger.error(f"Failed to start snoop channel: {snoop_error}", exc_info=True)
+                logger.warning(f"RTP capture not available - ASR will not receive audio")
             
             # Step 2: Create call record in database
             call_id = uuid.uuid4()
@@ -204,6 +226,15 @@ class AsteriskCallHandler:
         # Stop voice processor
         await self.voice_manager.remove_processor(channel_id)
         
+        # Clean up media channel
+        if channel_id in self.media_channels:
+            media_channel_id = self.media_channels.pop(channel_id)
+            try:
+                await self.ari.hangup_channel(media_channel_id)
+                logger.info(f"Media channel {media_channel_id} cleaned up")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup media channel: {e}")
+        
         # Get FSM results
         fsm = self.fsm_instances.pop(channel_id, None)
         if fsm:
@@ -246,6 +277,89 @@ class AsteriskCallHandler:
         cause = event.get('cause')
         
         logger.info(f"Hangup request for {channel_id}, cause: {cause}")
+    
+    async def _on_media_received(self, event: Dict):
+        """
+        Handle RTP audio received from channel (for ASR)
+        
+        Args:
+            event: ChannelMediaReceived event from Asterisk ARI
+        """
+        try:
+            channel = event.get('channel', {})
+            media_channel_id = channel.get('id')
+            
+            if not media_channel_id:
+                logger.debug(f"No channel ID in media event")
+                return
+            
+            # Find original channel_id from media_channel_id (snoop channel)
+            original_channel_id = None
+            for ch_id, snoop_id in self.media_channels.items():
+                if snoop_id == media_channel_id:
+                    original_channel_id = ch_id
+                    break
+            
+            if not original_channel_id:
+                # If not found in media_channels, try to extract from channel name
+                # Snoop channels might have names like "SIP/xxx-00000001;2"
+                logger.debug(f"Media received from channel {media_channel_id}, checking if it's a snoop channel")
+                # For now, skip if we can't match
+                return
+            
+            # Get media payload
+            # Asterisk ARI ChannelMediaReceived event structure:
+            # {
+            #   "type": "ChannelMediaReceived",
+            #   "channel": {"id": "..."},
+            #   "media": {
+            #     "payload": "hex-encoded-audio-data",
+            #     "format": "slin16" or "pcmu"
+            #   }
+            # }
+            media = event.get('media', {})
+            payload = media.get('payload')
+            format_type = media.get('format', 'pcmu')
+            
+            if not payload:
+                logger.debug(f"No payload in media event from {media_channel_id}")
+                return
+            
+            # Get voice processor for this channel
+            processor = self.voice_manager.get_processor(original_channel_id)
+            if not processor:
+                logger.debug(f"No voice processor for channel {original_channel_id}")
+                return
+            
+            # Determine codec from format
+            codec = "pcmu"
+            if format_type == "slin16" or format_type == "slin":
+                codec = "l16"
+            elif format_type == "pcma" or format_type == "alaw":
+                codec = "pcma"
+            
+            # Send audio to processor (it will convert and send to ASR)
+            # Payload might be hex-encoded bytes or raw bytes
+            try:
+                if isinstance(payload, str):
+                    # Try to decode as hex
+                    try:
+                        audio_data = bytes.fromhex(payload)
+                    except ValueError:
+                        # If not hex, try base64
+                        import base64
+                        audio_data = base64.b64decode(payload)
+                else:
+                    audio_data = payload
+                
+                # Send to processor
+                await processor.receive_rtp_audio(audio_data, codec=codec)
+                logger.debug(f"Sent {len(audio_data)} bytes of {codec} audio to processor for channel {original_channel_id}")
+            except Exception as e:
+                logger.error(f"Error processing RTP audio: {e}", exc_info=True)
+        
+        except Exception as e:
+            logger.error(f"Error in _on_media_received: {e}", exc_info=True)
     
     async def initiate_call(
         self,
