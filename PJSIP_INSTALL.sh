@@ -111,6 +111,18 @@ echo "Используется $(nproc) ядер процессора"
 if make dep && make -j$(nproc) && make install; then
     ldconfig
     echo "✅ PJSIP скомпилирован и установлен"
+    
+    # Копируем pjsua в /usr/local/bin для доступа из PATH
+    echo "📦 Установка pjsua в /usr/local/bin..."
+    PJSUA_BIN=$(find pjsip-apps/bin -name "pjsua-*" -type f 2>/dev/null | head -1)
+    if [ -n "$PJSUA_BIN" ] && [ -f "$PJSUA_BIN" ]; then
+        sudo cp "$PJSUA_BIN" /usr/local/bin/pjsua
+        sudo chmod 755 /usr/local/bin/pjsua
+        echo "✅ pjsua установлен в /usr/local/bin/pjsua"
+    else
+        echo "⚠️  pjsua не найден в pjsip-apps/bin, проверяем вручную..."
+        find pjsip-apps/bin -name "*pjsua*" 2>/dev/null || echo "pjsua не найден"
+    fi
 else
     echo "❌ Ошибка компиляции PJSIP!"
     echo "Проверьте логи выше для деталей"
@@ -160,15 +172,22 @@ fi
 
 # Часть 5. Проверка WebSocket транспорта
 echo "🔍 Часть 5: Проверка WebSocket транспорта..."
-if pjsua --help 2>&1 | grep -qE "--websocket|websocket"; then
-    echo "✅ WebSocket транспорт доступен в pjsua"
-    echo "Доступные опции WebSocket:"
-    pjsua --help 2>&1 | grep -E "--websocket|websocket" || true
+if command -v pjsua &> /dev/null; then
+    if pjsua --help 2>&1 | grep -qE "--websocket|websocket"; then
+        echo "✅ WebSocket транспорт доступен в pjsua"
+        echo "Доступные опции WebSocket:"
+        pjsua --help 2>&1 | grep -E "--websocket|websocket" || true
+    else
+        echo "⚠️  WebSocket опции не найдены в справке pjsua"
+        echo "Проверяем версию pjsua..."
+        pjsua --version 2>&1 | head -1 || true
+        echo "Проверяем наличие WebSocket в собранном бинарнике..."
+        strings /usr/local/bin/pjsua 2>/dev/null | grep -i websocket | head -3 || echo "WebSocket строки не найдены"
+    fi
 else
-    echo "❌ WebSocket транспорт НЕ найден в pjsua!"
-    echo "Проверяем версию pjsua..."
-    pjsua --version || true
-    echo "⚠️  Возможно, WebSocket не был скомпилирован. Проверьте логи компиляции выше."
+    echo "⚠️  pjsua не найден в PATH"
+    echo "Проверяем наличие в исходниках..."
+    find /usr/local/src/pjproject/pjsip-apps/bin -name "*pjsua*" 2>/dev/null || echo "pjsua не найден"
 fi
 
 # Часть 6. Настройка Asterisk для WebSocket
@@ -339,18 +358,31 @@ fi
 # Проверка WebSocket транспорта в Asterisk
 echo "🔍 Проверка WebSocket транспорта в Asterisk..."
 sleep 2  # Даем время Asterisk загрузить модули
-if asterisk -rx "pjsip show transports" 2>/dev/null | grep -qE "ws|wss|websocket"; then
-    echo "✅ WebSocket транспорт зарегистрирован в Asterisk"
-    asterisk -rx "pjsip show transports" 2>/dev/null | grep -E "ws|wss|websocket" || true
+
+# Сначала проверяем, есть ли модули res_pjsip
+PJSIP_MODULES=$(asterisk -rx "module show like pjsip" 2>/dev/null | grep -c "res_pjsip" || echo "0")
+if [ "$PJSIP_MODULES" -gt 0 ]; then
+    echo "✅ Модули res_pjsip загружены ($PJSIP_MODULES модулей)"
+    if asterisk -rx "pjsip show transports" 2>/dev/null | grep -qE "ws|wss|websocket"; then
+        echo "✅ WebSocket транспорт зарегистрирован в Asterisk"
+        asterisk -rx "pjsip show transports" 2>/dev/null | grep -E "ws|wss|websocket" || true
+    else
+        echo "⚠️  WebSocket транспорт не найден в Asterisk PJSIP"
+        echo "Проверяем все транспорты:"
+        asterisk -rx "pjsip show transports" 2>/dev/null || true
+        echo ""
+        echo "💡 Убедитесь, что в /etc/asterisk/pjsip.conf есть секция [transport-ws]"
+    fi
 else
-    echo "⚠️  WebSocket транспорт не найден в Asterisk"
-    echo "Проверяем все транспорты:"
-    asterisk -rx "pjsip show transports" 2>/dev/null || true
+    echo "⚠️  Модули res_pjsip не загружены в Asterisk"
+    echo "Это означает, что Asterisk собран без PJSIP поддержки или модули не включены"
+    echo "Проверяем загруженные WebSocket модули:"
+    asterisk -rx "module show like websocket" 2>/dev/null | grep -i websocket || true
     echo ""
-    echo "Проверяем загруженные модули:"
-    asterisk -rx "module show like websocket" 2>/dev/null || true
-    echo ""
-    echo "Если модули не загружены, проверьте /etc/asterisk/modules.conf"
+    echo "💡 Для использования PJSIP WebSocket транспорта нужно:"
+    echo "   1. Пересобрать Asterisk с поддержкой res_pjsip"
+    echo "   2. Или установить пакет asterisk-pjsip (если доступен)"
+    echo "   3. Убедиться, что в /etc/asterisk/modules.conf загружены модули res_pjsip"
 fi
 
 # Проверка загруженных WebSocket модулей
