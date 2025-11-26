@@ -153,12 +153,15 @@ class AsteriskCallHandler:
                     snoop_channel = await self.ari.snoop_channel(
                         channel_id=channel_id,
                         app=self.ari.app_name,
-                        spy="both",
+                        spy="both",  # ← ВАЖНО: both для захвата входящего и исходящего RTP
                         whisper="none"
                     )
                     snoop_id = snoop_channel.get('id')
+                    snoop_name = snoop_channel.get('name', 'unknown')
                     self.media_channels[channel_id] = snoop_id
-                    logger.info(f"✅ Snoop channel started: {snoop_id} for channel {channel_id}")
+                    logger.info(f"✅ Snoop channel started: {snoop_id} ({snoop_name}) for channel {channel_id}")
+                    logger.info(f"📋 Snoop configuration: spy=both, whisper=none")
+                    logger.info(f"📋 Media channels mapping: {self.media_channels}")
                 except Exception as snoop_error:
                     logger.error(f"Failed to start snoop channel: {snoop_error}", exc_info=True)
                     logger.warning(f"RTP capture not available - ASR will not receive audio")
@@ -308,11 +311,14 @@ class AsteriskCallHandler:
             event: ChannelMediaReceived event from Asterisk ARI
         """
         try:
+            logger.info(f"🔊 ChannelMediaReceived event received!")  # ← ДИАГНОСТИКА
+            logger.info(f"Event data: {event}")  # ← ДИАГНОСТИКА
+            
             channel = event.get('channel', {})
             media_channel_id = channel.get('id')
             
             if not media_channel_id:
-                logger.debug(f"No channel ID in media event")
+                logger.warning(f"⚠️ No channel ID in media event")
                 return
             
             # Find original channel_id from media_channel_id (snoop channel)
@@ -325,7 +331,9 @@ class AsteriskCallHandler:
             if not original_channel_id:
                 # If not found in media_channels, try to extract from channel name
                 # Snoop channels might have names like "SIP/xxx-00000001;2"
-                logger.debug(f"Media received from channel {media_channel_id}, checking if it's a snoop channel")
+                logger.warning(f"⚠️ Media received from channel {media_channel_id}, but not found in media_channels mapping")
+                logger.warning(f"Current media_channels: {self.media_channels}")
+                logger.warning(f"Channel name: {channel.get('name', 'unknown')}")
                 # For now, skip if we can't match
                 return
             
@@ -376,7 +384,7 @@ class AsteriskCallHandler:
                 
                 # Send to processor
                 await processor.receive_rtp_audio(audio_data, codec=codec)
-                logger.debug(f"Sent {len(audio_data)} bytes of {codec} audio to processor for channel {original_channel_id}")
+                logger.info(f"✅ Sent {len(audio_data)} bytes of {codec} audio to processor for channel {original_channel_id}")
             except Exception as e:
                 logger.error(f"Error processing RTP audio: {e}", exc_info=True)
         
