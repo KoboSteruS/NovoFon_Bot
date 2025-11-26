@@ -46,7 +46,7 @@ echo "✅ PJSIP 2.14.1 скачан"
 # Часть 3. Конфигурация PJSIP с WebSocket
 echo "🔧 Часть 3: Конфигурация PJSIP с WebSocket..."
 cat > user.mak <<'EOF'
-PJ_CONFIGURE_OPTS = --enable-shared
+PJ_CONFIGURE_OPTS = --enable-shared --enable-ssl --enable-transport-websocket --with-openssl
 CFLAGS += -DPJ_HAS_SSL_SOCK=1
 CFLAGS += -DPJMEDIA_HAS_WEBRTC_AEC=0
 CFLAGS += -DPJSIP_HAS_WS_TRANSPORT=1
@@ -54,30 +54,73 @@ EOF
 
 echo "✅ user.mak создан"
 
-# Конфигурируем
-echo "🔧 Конфигурирование PJSIP..."
-./configure --enable-shared
-
-echo "✅ Конфигурация завершена"
+# Конфигурируем с правильными флагами для WebSocket
+echo "🔧 Конфигурирование PJSIP с WebSocket поддержкой..."
+export CFLAGS="$CFLAGS -DPJSIP_HAS_WS_TRANSPORT=1"
+if ./configure --enable-shared --enable-ssl --enable-transport-websocket --with-openssl; then
+    echo "✅ Конфигурация завершена"
+    
+    # Проверяем, что WebSocket транспорт включен
+    if grep -q "PJSIP_HAS_WS_TRANSPORT" config.log 2>/dev/null || grep -q "transport.*websocket" config.log 2>/dev/null; then
+        echo "✅ WebSocket транспорт включен в конфигурации"
+    else
+        echo "⚠️  Предупреждение: WebSocket транспорт может быть не включен"
+        echo "Проверяем config.log..."
+        grep -i "websocket\|ws_transport" config.log 2>/dev/null | head -5 || echo "Нет упоминаний WebSocket в config.log"
+    fi
+else
+    echo "❌ Ошибка конфигурации PJSIP!"
+    echo "Проверьте зависимости и логи выше"
+    exit 1
+fi
 
 # Часть 4. Компиляция PJSIP
 echo "🔨 Часть 4: Компиляция PJSIP (это может занять несколько минут)..."
-make dep
-make -j$(nproc)
-make install
-ldconfig
+echo "Используется $(nproc) ядер процессора"
+if make dep && make -j$(nproc) && make install; then
+    ldconfig
+    echo "✅ PJSIP скомпилирован и установлен"
+else
+    echo "❌ Ошибка компиляции PJSIP!"
+    echo "Проверьте логи выше для деталей"
+    exit 1
+fi
 
-echo "✅ PJSIP скомпилирован и установлен"
+# Опционально: Сборка Python bindings (pjsua2)
+# Установите BUILD_PYTHON_BINDINGS=yes для сборки Python bindings
+if [ "${BUILD_PYTHON_BINDINGS:-no}" = "yes" ]; then
+    echo "🐍 Сборка Python bindings (pjsua2)..."
+    # Проверяем наличие swig
+    if ! command -v swig &> /dev/null; then
+        echo "📦 Установка swig для Python bindings..."
+        apt install -y swig python3-dev
+    fi
+    cd pjsip-apps/src/swig
+    if make python 2>/dev/null; then
+        sudo make install-python
+        echo "✅ Python bindings установлены"
+        echo "Для использования в Python:"
+        echo "  from pjsua2 import *"
+    else
+        echo "⚠️  Не удалось собрать Python bindings"
+        echo "Проверьте логи выше для деталей"
+    fi
+    cd /usr/local/src/pjproject
+else
+    echo "⏭️  Пропускаем сборку Python bindings (установите BUILD_PYTHON_BINDINGS=yes для включения)"
+fi
 
 # Часть 5. Проверка WebSocket транспорта
 echo "🔍 Часть 5: Проверка WebSocket транспорта..."
-if pjsua --help 2>&1 | grep -q "websocket"; then
+if pjsua --help 2>&1 | grep -qE "--websocket|websocket"; then
     echo "✅ WebSocket транспорт доступен в pjsua"
-    pjsua --help 2>&1 | grep -i websocket || true
+    echo "Доступные опции WebSocket:"
+    pjsua --help 2>&1 | grep -E "--websocket|websocket" || true
 else
-    echo "⚠️  WebSocket транспорт не найден в справке pjsua"
+    echo "❌ WebSocket транспорт НЕ найден в pjsua!"
     echo "Проверяем версию pjsua..."
     pjsua --version || true
+    echo "⚠️  Возможно, WebSocket не был скомпилирован. Проверьте логи компиляции выше."
 fi
 
 # Часть 6. Настройка Asterisk для WebSocket
@@ -103,12 +146,11 @@ if [ -f "/etc/asterisk/http.conf" ]; then
         sed -i 's/^bindport=.*/bindport=8088/' /etc/asterisk/http.conf || echo "bindport=8088" >> /etc/asterisk/http.conf
     fi
     
-    # Включаем WebSocket
-    if ! grep -q "^wsenabled=yes" /etc/asterisk/http.conf; then
+    # Включаем WebSocket (правильный синтаксис)
+    if ! grep -q "^websocket_enabled=yes" /etc/asterisk/http.conf; then
         echo "" >> /etc/asterisk/http.conf
         echo "; WebSocket support" >> /etc/asterisk/http.conf
-        echo "wsenabled=yes" >> /etc/asterisk/http.conf
-        echo "wssenabled=yes" >> /etc/asterisk/http.conf
+        echo "websocket_enabled=yes" >> /etc/asterisk/http.conf
     fi
     
     echo "✅ http.conf обновлен"
@@ -121,8 +163,7 @@ bindaddr=0.0.0.0
 bindport=8088
 
 ; WebSocket support
-wsenabled=yes
-wssenabled=yes
+websocket_enabled=yes
 EOF
     chown asterisk:asterisk /etc/asterisk/http.conf
     chmod 644 /etc/asterisk/http.conf
@@ -184,6 +225,37 @@ EOF
     echo "✅ pjsip.conf создан"
 fi
 
+# Обновляем modules.conf для загрузки WebSocket модулей
+echo "📝 Обновление /etc/asterisk/modules.conf..."
+if [ -f "/etc/asterisk/modules.conf" ]; then
+    # Создаем backup
+    cp /etc/asterisk/modules.conf /etc/asterisk/modules.conf.backup.$(date +%Y%m%d_%H%M%S)
+    
+    # Проверяем наличие WebSocket модулей
+    if ! grep -q "^load => res_http_websocket.so" /etc/asterisk/modules.conf; then
+        echo "" >> /etc/asterisk/modules.conf
+        echo "; WebSocket modules for PJSIP" >> /etc/asterisk/modules.conf
+        echo "load => res_http_websocket.so" >> /etc/asterisk/modules.conf
+    fi
+    
+    if ! grep -q "^load => res_pjsip_transport_websocket.so" /etc/asterisk/modules.conf; then
+        echo "load => res_pjsip_transport_websocket.so" >> /etc/asterisk/modules.conf
+    fi
+    
+    echo "✅ modules.conf обновлен"
+else
+    echo "⚠️  /etc/asterisk/modules.conf не найден, создаем базовую конфигурацию..."
+    cat > /etc/asterisk/modules.conf <<'EOF'
+; Asterisk modules configuration
+; WebSocket modules for PJSIP
+load => res_http_websocket.so
+load => res_pjsip_transport_websocket.so
+EOF
+    chown asterisk:asterisk /etc/asterisk/modules.conf
+    chmod 644 /etc/asterisk/modules.conf
+    echo "✅ modules.conf создан"
+fi
+
 # Часть 7. Перезапуск Asterisk
 echo "🔄 Часть 7: Перезапуск Asterisk..."
 if systemctl is-active --quiet asterisk; then
@@ -218,13 +290,31 @@ fi
 
 # Проверка WebSocket транспорта в Asterisk
 echo "🔍 Проверка WebSocket транспорта в Asterisk..."
-if asterisk -rx "pjsip show transports" 2>/dev/null | grep -q "ws\|wss"; then
+sleep 2  # Даем время Asterisk загрузить модули
+if asterisk -rx "pjsip show transports" 2>/dev/null | grep -qE "ws|wss|websocket"; then
     echo "✅ WebSocket транспорт зарегистрирован в Asterisk"
-    asterisk -rx "pjsip show transports" 2>/dev/null | grep -E "ws|wss" || true
+    asterisk -rx "pjsip show transports" 2>/dev/null | grep -E "ws|wss|websocket" || true
 else
     echo "⚠️  WebSocket транспорт не найден в Asterisk"
     echo "Проверяем все транспорты:"
     asterisk -rx "pjsip show transports" 2>/dev/null || true
+    echo ""
+    echo "Проверяем загруженные модули:"
+    asterisk -rx "module show like websocket" 2>/dev/null || true
+    echo ""
+    echo "Если модули не загружены, проверьте /etc/asterisk/modules.conf"
+fi
+
+# Проверка загруженных WebSocket модулей
+echo "🔍 Проверка загруженных WebSocket модулей..."
+if asterisk -rx "module show like websocket" 2>/dev/null | grep -q "websocket"; then
+    echo "✅ WebSocket модули загружены"
+    asterisk -rx "module show like websocket" 2>/dev/null | grep -i websocket || true
+else
+    echo "⚠️  WebSocket модули не загружены"
+    echo "Попробуйте перезагрузить модули:"
+    echo "  sudo asterisk -rx 'module reload res_http_websocket.so'"
+    echo "  sudo asterisk -rx 'module reload res_pjsip_transport_websocket.so'"
 fi
 
 echo ""
@@ -246,5 +336,8 @@ echo "  wscat -c ws://server:8088/ws"
 echo ""
 echo "Логи Asterisk:"
 echo "  sudo journalctl -u asterisk -f"
+echo ""
+echo "Для сборки Python bindings при следующей установке:"
+echo "  BUILD_PYTHON_BINDINGS=yes ./PJSIP_INSTALL.sh"
 echo ""
 

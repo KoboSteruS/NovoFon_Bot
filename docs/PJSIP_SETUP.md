@@ -54,14 +54,17 @@ git checkout 2.14.1
 
 ```bash
 cat > user.mak <<EOF
-PJ_CONFIGURE_OPTS = --enable-shared
+PJ_CONFIGURE_OPTS = --enable-shared --enable-ssl --enable-transport-websocket --with-openssl
 CFLAGS += -DPJ_HAS_SSL_SOCK=1
 CFLAGS += -DPJMEDIA_HAS_WEBRTC_AEC=0
 CFLAGS += -DPJSIP_HAS_WS_TRANSPORT=1
 EOF
 
-./configure --enable-shared
+export CFLAGS="$CFLAGS -DPJSIP_HAS_WS_TRANSPORT=1"
+./configure --enable-shared --enable-ssl --enable-transport-websocket --with-openssl
 ```
+
+**ВАЖНО**: Без флагов `--enable-ssl --enable-transport-websocket --with-openssl` WebSocket транспорт НЕ будет скомпилирован!
 
 #### Часть 4. Компиляция
 
@@ -97,10 +100,11 @@ enabled=yes
 bindaddr=0.0.0.0
 bindport=8088
 
-; WebSocket support
-wsenabled=yes
-wssenabled=yes
+; WebSocket support (правильный синтаксис)
+websocket_enabled=yes
 ```
+
+**ВАЖНО**: Используйте `websocket_enabled=yes`, а не `wsenabled=yes`!
 
 ### 2. PJSIP WebSocket транспорт
 
@@ -122,13 +126,25 @@ cert_file=/etc/asterisk/keys/asterisk.pem
 priv_key_file=/etc/asterisk/keys/asterisk.key
 ```
 
-### 3. Перезапуск Asterisk
+### 3. Настройка modules.conf
+
+Отредактируйте `/etc/asterisk/modules.conf`, добавьте:
+
+```ini
+; WebSocket modules для PJSIP
+load => res_http_websocket.so
+load => res_pjsip_transport_websocket.so
+```
+
+**ВАЖНО**: Без этих строк WebSocket модули не загрузятся!
+
+### 4. Перезапуск Asterisk
 
 ```bash
 sudo systemctl restart asterisk
 ```
 
-### 4. Проверка
+### 5. Проверка
 
 ```bash
 # Проверка порта 8088
@@ -136,6 +152,14 @@ sudo netstat -tulpn | grep 8088
 
 # Проверка WebSocket транспорта
 sudo asterisk -rx "pjsip show transports"
+
+# Проверка загруженных модулей
+sudo asterisk -rx "module show like websocket"
+```
+
+Должно быть:
+```
+Transport: ws, protocol: ws, bind: 0.0.0.0
 ```
 
 Должно быть:

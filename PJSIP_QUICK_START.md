@@ -45,6 +45,7 @@ sudo journalctl -u pjsua -f
    ```bash
    sudo cp asterisk_configs/http.conf /etc/asterisk/http.conf
    sudo cp asterisk_configs/pjsip.conf /etc/asterisk/pjsip.conf
+   sudo cp asterisk_configs/modules.conf /etc/asterisk/modules.conf
    sudo systemctl restart asterisk
    ```
 
