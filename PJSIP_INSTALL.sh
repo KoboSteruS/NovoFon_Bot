@@ -181,11 +181,11 @@ if command -v pjsua &> /dev/null; then
     echo "✅ pjsua найден: $(which pjsua)"
     
     # Проверка 1: Опции в --help
-    if pjsua --help 2>&1 | grep -qE "--websocket|websocket"; then
+    if pjsua --help 2>&1 | grep -qE "websocket"; then
         echo "✅ WebSocket опции найдены в справке pjsua"
         WS_STATUS="OK"
         echo "Доступные опции WebSocket:"
-        pjsua --help 2>&1 | grep -E "--websocket|websocket" || true
+        pjsua --help 2>&1 | grep -i "websocket" || true
     else
         echo "⚠️  WebSocket опции НЕ найдены в справке pjsua"
         WS_ISSUES="${WS_ISSUES}• WebSocket опции отсутствуют в --help\n"
@@ -203,15 +203,30 @@ if command -v pjsua &> /dev/null; then
             WS_STATUS="FAILED"
             WS_ISSUES="${WS_ISSUES}• WebSocket НЕ скомпилирован в pjsua\n"
             
-            # Проверка 3: config.log
+            # Проверка 3: config.log и проверка компиляции pjsua
             echo "Проверяем config.log на наличие WebSocket транспорта..."
             if [ -f "/usr/local/src/pjproject/config.log" ]; then
-                WS_IN_CONFIG=$(grep -i "websocket\|ws_transport\|PJSIP_HAS_WS" /usr/local/src/pjproject/config.log 2>/dev/null | wc -l)
+                WS_IN_CONFIG=$(grep -iE "websocket|ws_transport|PJSIP_HAS_WS" /usr/local/src/pjproject/config.log 2>/dev/null | wc -l)
                 if [ "$WS_IN_CONFIG" -gt 0 ]; then
                     echo "⚠️  WebSocket упоминается в config.log ($WS_IN_CONFIG раз)"
                     echo "Фрагменты из config.log:"
-                    grep -i "websocket\|ws_transport\|PJSIP_HAS_WS" /usr/local/src/pjproject/config.log 2>/dev/null | head -5
-                    WS_ISSUES="${WS_ISSUES}• WebSocket упоминается в config.log, но не скомпилирован\n"
+                    grep -iE "websocket|ws_transport|PJSIP_HAS_WS" /usr/local/src/pjproject/config.log 2>/dev/null | head -5
+                    
+                    # Проверяем, был ли WebSocket включен при компиляции pjsua
+                    echo "Проверяем, был ли WebSocket включен в pjsua при компиляции..."
+                    if grep -q "enable-transport-websocket" /usr/local/src/pjproject/config.log 2>/dev/null; then
+                        echo "✅ Флаг --enable-transport-websocket найден в config.log"
+                        # Проверяем, был ли он успешно применен
+                        if grep -qE "transport.*websocket.*yes|PJSIP_HAS_WS_TRANSPORT.*1" /usr/local/src/pjproject/config.log 2>/dev/null; then
+                            echo "✅ WebSocket транспорт был включен при конфигурации"
+                            WS_ISSUES="${WS_ISSUES}• WebSocket включен в config, но не скомпилирован в pjsua (возможно, ошибка компиляции)\n"
+                        else
+                            echo "⚠️  WebSocket флаг есть, но транспорт не был включен"
+                            WS_ISSUES="${WS_ISSUES}• WebSocket флаг указан, но транспорт не активирован\n"
+                        fi
+                    else
+                        WS_ISSUES="${WS_ISSUES}• WebSocket упоминается в config.log, но флаг не найден\n"
+                    fi
                 else
                     echo "❌ WebSocket НЕ упоминается в config.log"
                     WS_ISSUES="${WS_ISSUES}• WebSocket не был включен при конфигурации\n"
@@ -221,8 +236,19 @@ if command -v pjsua &> /dev/null; then
                 WS_ISSUES="${WS_ISSUES}• config.log недоступен для проверки\n"
             fi
             
-            # Проверка 4: Флаги компиляции
-            echo "Проверяем флаги компиляции..."
+            # Проверка 4: Проверяем исходники pjsua на наличие WebSocket кода
+            echo "Проверяем исходники pjsua на наличие WebSocket..."
+            if [ -f "/usr/local/src/pjproject/pjsip-apps/src/pjsua/pjsua_app.c" ]; then
+                if grep -qiE "websocket|ws_transport" /usr/local/src/pjproject/pjsip-apps/src/pjsua/pjsua_app.c 2>/dev/null; then
+                    echo "✅ WebSocket код найден в исходниках pjsua"
+                else
+                    echo "⚠️  WebSocket код НЕ найден в исходниках pjsua"
+                    WS_ISSUES="${WS_ISSUES}• WebSocket код отсутствует в исходниках pjsua\n"
+                fi
+            fi
+            
+            # Проверка 5: Флаги компиляции в user.mak
+            echo "Проверяем флаги компиляции в user.mak..."
             if [ -f "/usr/local/src/pjproject/user.mak" ]; then
                 if grep -q "enable-transport-websocket" /usr/local/src/pjproject/user.mak 2>/dev/null; then
                     echo "✅ Флаг --enable-transport-websocket найден в user.mak"
