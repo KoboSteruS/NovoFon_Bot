@@ -237,11 +237,11 @@ class VoiceProcessor:
                     if len(full_audio) < 2:
                         raise ValueError(f"Audio too short: {len(full_audio)} bytes")
                     
-                    # ИСПРАВЛЕНО: Используем 16kHz напрямую (не ресемплим)
-                    # Asterisk ожидает 16kHz для SLIN16, ресемплинг на 8kHz вызывает писклявость
+                    # ElevenLabs возвращает 16kHz PCM16
+                    # Ресемплируем на 8kHz в _send_audio_to_asterisk для SLIN16
                     logger.info(f"PCM16 audio ready: {len(full_audio)} bytes (PCM16, 16kHz)")
                     
-                    # Отправляем в Asterisk через ARI (PCM16, 16kHz для SLIN16)
+                    # Отправляем в Asterisk через ARI (будет ресемплировано на 8kHz для SLIN16)
                     await self._send_audio_to_asterisk(full_audio)
                     
                 except Exception as e:
@@ -270,11 +270,11 @@ class VoiceProcessor:
                     if len(audio_data) < 2:
                         raise ValueError(f"Audio too short: {len(audio_data)} bytes")
                     
-                    # ИСПРАВЛЕНО: Используем 16kHz напрямую (не ресемплим)
-                    # Asterisk ожидает 16kHz для SLIN16, ресемплинг на 8kHz вызывает писклявость
+                    # ElevenLabs возвращает 16kHz PCM16
+                    # Ресемплируем на 8kHz в _send_audio_to_asterisk для SLIN16
                     logger.info(f"PCM16 audio ready: {len(audio_data)} bytes (PCM16, 16kHz)")
                     
-                    # Отправляем в Asterisk через ARI (PCM16, 16kHz для SLIN16)
+                    # Отправляем в Asterisk через ARI (будет ресемплировано на 8kHz для SLIN16)
                     await self._send_audio_to_asterisk(audio_data)
                     
                 except Exception as e:
@@ -288,10 +288,11 @@ class VoiceProcessor:
     
     async def _send_audio_to_asterisk(self, pcm16_data: bytes):
         """
-        Save PCM16 8kHz audio as SLIN16 raw file (.sln16) and play via Asterisk ARI
+        Save PCM16 audio as SLIN16 raw file (.sln16) and play via Asterisk ARI
         
         Args:
-            pcm16_data: PCM16 (16-bit, little-endian) audio data (8kHz, mono)
+            pcm16_data: PCM16 (16-bit, little-endian) audio data (16kHz, mono)
+                        Будет автоматически ресемплировано на 8kHz для SLIN16
         """
         if not self.ari_client:
             logger.warning("ARI client not available, cannot send audio to Asterisk")
@@ -319,9 +320,16 @@ class VoiceProcessor:
                 logger.warning(f"Failed to set directory permissions: {e}")
             
             # SLIN16 = raw PCM16LE, 8000 Hz, mono, без заголовка
-            # Просто записываем байты PCM16 напрямую
+            # ВАЖНО: ElevenLabs возвращает 16kHz, но Asterisk ожидает 8kHz для SLIN16
+            # Ресемплируем с 16kHz на 8kHz
+            from app.services.elevenlabs_client import AudioConverter
+            pcm16_8khz = AudioConverter.resample_pcm16(pcm16_data, 16000, 8000)
+            
+            logger.info(f"Resampled audio: {len(pcm16_data)} bytes (16kHz) -> {len(pcm16_8khz)} bytes (8kHz)")
+            
+            # Просто записываем байты PCM16 напрямую (8kHz)
             with open(slin_path, 'wb') as f:
-                f.write(pcm16_data)
+                f.write(pcm16_8khz)
             
             # Проверяем, что файл создался
             if not os.path.exists(slin_path):
@@ -345,7 +353,7 @@ class VoiceProcessor:
                 logger.warning(f"Failed to set file permissions: {e}")
             
             file_size = os.path.getsize(slin_path)
-            logger.info(f"✅ Created SLIN16 file: {slin_path} ({file_size} bytes PCM16, 16kHz, mono)")
+            logger.info(f"✅ Created SLIN16 file: {slin_path} ({file_size} bytes PCM16, 8kHz, mono)")
             
             # Проверяем, что файл действительно существует и доступен для чтения
             if not os.access(slin_path, os.R_OK):
@@ -360,7 +368,7 @@ class VoiceProcessor:
             # Формат: sound:filename (без расширения)
             media_uri = f"sound:{slin_filename}"
             
-            logger.info(f"Sending audio to Asterisk: {media_uri} ({len(pcm16_data)} bytes PCM16, {file_size} bytes SLIN16)")
+            logger.info(f"Sending audio to Asterisk: {media_uri} ({len(pcm16_data)} bytes PCM16@16kHz -> {len(pcm16_8khz)} bytes SLIN16@8kHz)")
             logger.info(f"File path: {slin_path}")
             logger.info(f"File exists: {os.path.exists(slin_path)}, readable: {os.access(slin_path, os.R_OK)}")
             
