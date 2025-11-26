@@ -172,23 +172,125 @@ fi
 
 # Часть 5. Проверка WebSocket транспорта
 echo "🔍 Часть 5: Проверка WebSocket транспорта..."
+echo "=========================================="
+
+WS_STATUS="UNKNOWN"
+WS_ISSUES=""
+
 if command -v pjsua &> /dev/null; then
+    echo "✅ pjsua найден: $(which pjsua)"
+    
+    # Проверка 1: Опции в --help
     if pjsua --help 2>&1 | grep -qE "--websocket|websocket"; then
-        echo "✅ WebSocket транспорт доступен в pjsua"
+        echo "✅ WebSocket опции найдены в справке pjsua"
+        WS_STATUS="OK"
         echo "Доступные опции WebSocket:"
         pjsua --help 2>&1 | grep -E "--websocket|websocket" || true
     else
-        echo "⚠️  WebSocket опции не найдены в справке pjsua"
-        echo "Проверяем версию pjsua..."
-        pjsua --version 2>&1 | head -1 || true
+        echo "⚠️  WebSocket опции НЕ найдены в справке pjsua"
+        WS_ISSUES="${WS_ISSUES}• WebSocket опции отсутствуют в --help\n"
+        
+        # Проверка 2: Строки в бинарнике
         echo "Проверяем наличие WebSocket в собранном бинарнике..."
-        strings /usr/local/bin/pjsua 2>/dev/null | grep -i websocket | head -3 || echo "WebSocket строки не найдены"
+        if strings /usr/local/bin/pjsua 2>/dev/null | grep -qi websocket; then
+            echo "✅ WebSocket строки найдены в бинарнике"
+            WS_STATUS="PARTIAL"
+            echo "Найденные строки:"
+            strings /usr/local/bin/pjsua 2>/dev/null | grep -i websocket | head -5
+            WS_ISSUES="${WS_ISSUES}• WebSocket скомпилирован, но опции не показываются в --help\n"
+        else
+            echo "❌ WebSocket строки НЕ найдены в бинарнике"
+            WS_STATUS="FAILED"
+            WS_ISSUES="${WS_ISSUES}• WebSocket НЕ скомпилирован в pjsua\n"
+            
+            # Проверка 3: config.log
+            echo "Проверяем config.log на наличие WebSocket транспорта..."
+            if [ -f "/usr/local/src/pjproject/config.log" ]; then
+                WS_IN_CONFIG=$(grep -i "websocket\|ws_transport\|PJSIP_HAS_WS" /usr/local/src/pjproject/config.log 2>/dev/null | wc -l)
+                if [ "$WS_IN_CONFIG" -gt 0 ]; then
+                    echo "⚠️  WebSocket упоминается в config.log ($WS_IN_CONFIG раз)"
+                    echo "Фрагменты из config.log:"
+                    grep -i "websocket\|ws_transport\|PJSIP_HAS_WS" /usr/local/src/pjproject/config.log 2>/dev/null | head -5
+                    WS_ISSUES="${WS_ISSUES}• WebSocket упоминается в config.log, но не скомпилирован\n"
+                else
+                    echo "❌ WebSocket НЕ упоминается в config.log"
+                    WS_ISSUES="${WS_ISSUES}• WebSocket не был включен при конфигурации\n"
+                fi
+            else
+                echo "⚠️  config.log не найден"
+                WS_ISSUES="${WS_ISSUES}• config.log недоступен для проверки\n"
+            fi
+            
+            # Проверка 4: Флаги компиляции
+            echo "Проверяем флаги компиляции..."
+            if [ -f "/usr/local/src/pjproject/user.mak" ]; then
+                if grep -q "enable-transport-websocket" /usr/local/src/pjproject/user.mak 2>/dev/null; then
+                    echo "✅ Флаг --enable-transport-websocket найден в user.mak"
+                else
+                    echo "❌ Флаг --enable-transport-websocket НЕ найден в user.mak"
+                    WS_ISSUES="${WS_ISSUES}• Флаг --enable-transport-websocket отсутствует в user.mak\n"
+                fi
+            fi
+        fi
     fi
+    
+    # Проверка версии
+    echo "Версия pjsua:"
+    pjsua --version 2>&1 | head -1 || true
+    
 else
-    echo "⚠️  pjsua не найден в PATH"
+    echo "❌ pjsua не найден в PATH"
+    WS_STATUS="FAILED"
+    WS_ISSUES="${WS_ISSUES}• pjsua не установлен в системе\n"
     echo "Проверяем наличие в исходниках..."
-    find /usr/local/src/pjproject/pjsip-apps/bin -name "*pjsua*" 2>/dev/null || echo "pjsua не найден"
+    PJSUA_FOUND=$(find /usr/local/src/pjproject/pjsip-apps/bin -name "*pjsua*" 2>/dev/null | head -1)
+    if [ -n "$PJSUA_FOUND" ]; then
+        echo "⚠️  pjsua найден в исходниках: $PJSUA_FOUND"
+        echo "💡 Скопируйте вручную: sudo cp $PJSUA_FOUND /usr/local/bin/pjsua"
+        WS_ISSUES="${WS_ISSUES}• pjsua найден в исходниках, но не в PATH\n"
+    else
+        echo "❌ pjsua не найден нигде"
+        WS_ISSUES="${WS_ISSUES}• pjsua не был собран\n"
+    fi
 fi
+
+# Итоговый отчет
+echo ""
+echo "=========================================="
+echo "📊 ИТОГОВЫЙ СТАТУС WebSocket (Этап 5):"
+echo "=========================================="
+case "$WS_STATUS" in
+    "OK")
+        echo "✅ WebSocket транспорт: РАБОТАЕТ"
+        echo "   Все проверки пройдены успешно"
+        ;;
+    "PARTIAL")
+        echo "⚠️  WebSocket транспорт: ЧАСТИЧНО РАБОТАЕТ"
+        echo "   WebSocket скомпилирован, но опции не показываются"
+        echo "   Возможно, это особенность версии 2.14.1"
+        ;;
+    "FAILED")
+        echo "❌ WebSocket транспорт: НЕ РАБОТАЕТ"
+        echo ""
+        echo "🔍 Обнаруженные проблемы:"
+        echo -e "$WS_ISSUES"
+        echo "💡 Решение:"
+        echo "   1. Убедитесь, что configure был запущен с флагами:"
+        echo "      --enable-ssl --enable-transport-websocket --with-openssl"
+        echo "   2. Проверьте, что OpenSSL установлен: apt install libssl-dev"
+        echo "   3. Пересоберите PJSIP:"
+        echo "      cd /usr/local/src/pjproject"
+        echo "      make clean"
+        echo "      ./configure --enable-shared --enable-ssl --enable-transport-websocket --with-openssl"
+        echo "      make -j\$(nproc) && make install"
+        ;;
+    *)
+        echo "❓ WebSocket транспорт: СТАТУС НЕИЗВЕСТЕН"
+        echo "   Не удалось определить состояние"
+        ;;
+esac
+echo "=========================================="
+echo ""
 
 # Часть 6. Настройка Asterisk для WebSocket
 echo "🔧 Часть 6: Настройка Asterisk для WebSocket..."
@@ -360,8 +462,15 @@ echo "🔍 Проверка WebSocket транспорта в Asterisk..."
 sleep 2  # Даем время Asterisk загрузить модули
 
 # Сначала проверяем, есть ли модули res_pjsip
-PJSIP_MODULES=$(asterisk -rx "module show like pjsip" 2>/dev/null | grep -c "res_pjsip" || echo "0")
-if [ "$PJSIP_MODULES" -gt 0 ]; then
+PJSIP_MODULES_OUTPUT=$(asterisk -rx "module show like pjsip" 2>/dev/null)
+PJSIP_MODULES=$(echo "$PJSIP_MODULES_OUTPUT" | grep -c "res_pjsip" 2>/dev/null || echo "0")
+# Убираем пробелы и переносы строк, оставляем только первое число
+PJSIP_MODULES=$(echo "$PJSIP_MODULES" | tr -d '[:space:]' | head -1)
+# Если пусто или не число, ставим 0
+if [ -z "$PJSIP_MODULES" ] || ! [ "$PJSIP_MODULES" -eq "$PJSIP_MODULES" ] 2>/dev/null; then
+    PJSIP_MODULES=0
+fi
+if [ "$PJSIP_MODULES" -gt 0 ] 2>/dev/null; then
     echo "✅ Модули res_pjsip загружены ($PJSIP_MODULES модулей)"
     if asterisk -rx "pjsip show transports" 2>/dev/null | grep -qE "ws|wss|websocket"; then
         echo "✅ WebSocket транспорт зарегистрирован в Asterisk"
