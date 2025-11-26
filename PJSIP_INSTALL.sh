@@ -7,6 +7,43 @@ echo "=========================================="
 echo "Установка PJSIP 2.14.1 с WebSocket"
 echo "=========================================="
 
+# Часть 0. Очистка старой установки и проблемных репозиториев
+echo "🧹 Часть 0: Предварительная очистка..."
+
+# 0.1 Отключаем устаревший baresip репозиторий (если остался)
+BARESIP_REPO="/etc/apt/sources.list.d/baresip.list"
+if [ -f "$BARESIP_REPO" ]; then
+    echo "⚠️  Найден устаревший baresip репозиторий. Отключаем..."
+    if grep -q "^deb " "$BARESIP_REPO"; then
+        sed -i 's/^deb /# deb /' "$BARESIP_REPO"
+    fi
+    echo "✅ Репозиторий baresip отключен: $BARESIP_REPO"
+fi
+
+# 0.2 Останавливаем старый сервис pjsua (если он есть)
+if systemctl list-unit-files | grep -q "^pjsua.service" 2>/dev/null; then
+    echo "⏹️  Останавливаем существующий pjsua.service..."
+    systemctl stop pjsua 2>/dev/null || true
+fi
+
+# 0.3 Удаляем старые бинарники и библиотеки PJSIP
+echo "🗑️  Удаляем старые бинарники/библиотеки PJSIP..."
+rm -rf /usr/local/src/pjproject
+rm -f /usr/local/lib/libpj*.so*
+rm -f /usr/local/lib/libpjnath*.so*
+rm -f /usr/local/lib/libpjmedia*.so*
+rm -f /usr/local/lib/libpjsip*.so*
+rm -f /usr/local/lib/libpjsua*.so*
+rm -f /usr/local/lib/libpj*.a
+rm -f /usr/local/lib/libpjsua*.a
+rm -rf /usr/local/include/pjlib*
+rm -rf /usr/local/include/pjnath
+rm -rf /usr/local/include/pjmedia
+rm -rf /usr/local/include/pjsip
+rm -rf /usr/local/include/pjsua*
+ldconfig
+echo "✅ Очистка завершена"
+
 # Часть 1. Установка зависимостей
 echo "📦 Часть 1: Установка зависимостей..."
 apt update
@@ -27,19 +64,11 @@ echo "✅ Зависимости установлены"
 
 # Часть 2. Скачивание PJSIP 2.14.1
 echo "📥 Часть 2: Скачивание PJSIP 2.14.1..."
+mkdir -p /usr/local/src
 cd /usr/local/src
-
-if [ -d "pjproject" ]; then
-    echo "⚠️  Директория pjproject уже существует, обновляем..."
-    cd pjproject
-    git fetch origin
-    git checkout 2.14.1
-    git reset --hard 2.14.1
-else
-    git clone https://github.com/pjsip/pjproject.git
-    cd pjproject
-    git checkout 2.14.1
-fi
+git clone https://github.com/pjsip/pjproject.git
+cd pjproject
+git checkout 2.14.1
 
 echo "✅ PJSIP 2.14.1 скачан"
 
@@ -57,7 +86,9 @@ echo "✅ user.mak создан"
 # Конфигурируем с правильными флагами для WebSocket
 echo "🔧 Конфигурирование PJSIP с WebSocket поддержкой..."
 export CFLAGS="$CFLAGS -DPJSIP_HAS_WS_TRANSPORT=1"
-if ./configure --enable-shared --enable-ssl --enable-transport-websocket --with-openssl; then
+export LDFLAGS="$LDFLAGS -lssl -lcrypto"
+export LIBS="$LIBS -lssl -lcrypto"
+if ./configure --enable-shared --enable-ssl --enable-ext-sound --enable-transport-websocket --with-openssl; then
     echo "✅ Конфигурация завершена"
     
     # Проверяем, что WebSocket транспорт включен

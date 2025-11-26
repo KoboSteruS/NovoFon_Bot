@@ -54,17 +54,19 @@ git checkout 2.14.1
 
 ```bash
 cat > user.mak <<EOF
-PJ_CONFIGURE_OPTS = --enable-shared --enable-ssl --enable-transport-websocket --with-openssl
+PJ_CONFIGURE_OPTS = --enable-shared --enable-ssl --enable-ext-sound --enable-transport-websocket --with-openssl
 CFLAGS += -DPJ_HAS_SSL_SOCK=1
 CFLAGS += -DPJMEDIA_HAS_WEBRTC_AEC=0
 CFLAGS += -DPJSIP_HAS_WS_TRANSPORT=1
 EOF
 
 export CFLAGS="$CFLAGS -DPJSIP_HAS_WS_TRANSPORT=1"
-./configure --enable-shared --enable-ssl --enable-transport-websocket --with-openssl
+export LDFLAGS="$LDFLAGS -lssl -lcrypto"
+export LIBS="$LIBS -lssl -lcrypto"
+./configure --enable-shared --enable-ssl --enable-ext-sound --enable-transport-websocket --with-openssl
 ```
 
-**ВАЖНО**: Без флагов `--enable-ssl --enable-transport-websocket --with-openssl` WebSocket транспорт НЕ будет скомпилирован!
+**ВАЖНО**: Без `--enable-ssl --enable-ext-sound --enable-transport-websocket --with-openssl` и линковки с `-lssl -lcrypto` WebSocket транспорт НЕ соберётся.
 
 #### Часть 4. Компиляция
 
