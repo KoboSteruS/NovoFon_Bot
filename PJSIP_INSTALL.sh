@@ -121,22 +121,39 @@ fi
 # Установите BUILD_PYTHON_BINDINGS=yes для сборки Python bindings
 if [ "${BUILD_PYTHON_BINDINGS:-no}" = "yes" ]; then
     echo "🐍 Сборка Python bindings (pjsua2)..."
-    # Проверяем наличие swig
     if ! command -v swig &> /dev/null; then
         echo "📦 Установка swig для Python bindings..."
         apt install -y swig python3-dev
     fi
+
     cd pjsip-apps/src/swig
     if make python 2>/dev/null; then
-        sudo make install-python
-        echo "✅ Python bindings установлены"
-        echo "Для использования в Python:"
-        echo "  from pjsua2 import *"
+        echo "✅ pjsua2 библиотеки собраны"
+
+        # Определяем директорию site-packages
+        PYTHON_SITE_DIR=$(python3 - <<'PY'
+import site, sys
+paths = site.getsitepackages() or [site.getusersitepackages()]
+print(paths[0] if paths else "/usr/local/lib/python3/dist-packages")
+PY
+)
+
+        echo "📁 Копируем pjsua2 в ${PYTHON_SITE_DIR}..."
+        PJSUA2_SO=$(find build -name "_pjsua2*.so" | head -n 1)
+        if [ -z "$PJSUA2_SO" ]; then
+            echo "❌ Не найден скомпилированный _pjsua2*.so"
+        else
+            cp "$PJSUA2_SO" "${PYTHON_SITE_DIR}/"
+            cp pjsua2.py "${PYTHON_SITE_DIR}/"
+            echo "✅ Python модуль pjsua2 установлен"
+            echo "  from pjsua2 import *"
+        fi
     else
-        echo "⚠️  Не удалось собрать Python bindings"
-        echo "Проверьте логи выше для деталей"
+        echo "⚠️  Не удалось собрать pjsua2 (см. логи выше)"
     fi
     cd /usr/local/src/pjproject
+
+    echo "ℹ️  Модуль pjsua (Python 2) больше не поддерживается и не устанавливается"
 else
     echo "⏭️  Пропускаем сборку Python bindings (установите BUILD_PYTHON_BINDINGS=yes для включения)"
 fi
