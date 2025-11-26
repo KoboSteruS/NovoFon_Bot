@@ -92,6 +92,18 @@ class AsteriskCallHandler:
         logger.info(f"Caller: {caller_number}")
         logger.info(f"Args: {args}")
         
+        # ИСПРАВЛЕНО: Игнорируем StasisStart от snoop-каналов
+        # Snoop-каналы тоже попадают в Stasis, но мы их не обрабатываем
+        channel_name = channel.get('name', '')
+        if channel_id and ('Snoop' in channel_name or 'snoop' in channel_name.lower()):
+            logger.debug(f"Ignoring StasisStart from snoop channel: {channel_id} ({channel_name})")
+            return
+        
+        # Проверяем, не обрабатываем ли мы уже этот канал
+        if channel_id in self.active_channels:
+            logger.warning(f"Channel {channel_id} already being processed, ignoring duplicate StasisStart")
+            return
+        
         # Determine call direction
         # Если args пустой или direction unknown, считаем входящим звонком
         direction = args[0] if args else 'unknown'
@@ -133,21 +145,25 @@ class AsteriskCallHandler:
             await self.ari.answer_channel(channel_id)
             logger.info(f"✅ Channel {channel_id} answered")
             
-            # Step 1.5: Start snoop channel for RTP capture (external_media requires RTP server)
-            logger.info(f"1.5️⃣ Starting snoop channel for RTP capture on channel {channel_id}...")
-            try:
-                snoop_channel = await self.ari.snoop_channel(
-                    channel_id=channel_id,
-                    app=self.ari.app_name,
-                    spy="both",
-                    whisper="none"
-                )
-                snoop_id = snoop_channel.get('id')
-                self.media_channels[channel_id] = snoop_id
-                logger.info(f"✅ Snoop channel started: {snoop_id} for channel {channel_id}")
-            except Exception as snoop_error:
-                logger.error(f"Failed to start snoop channel: {snoop_error}", exc_info=True)
-                logger.warning(f"RTP capture not available - ASR will not receive audio")
+            # Step 1.5: Start snoop channel for RTP capture (ONLY ONCE per call)
+            # ИСПРАВЛЕНО: Проверяем, что snoop еще не создан для этого канала
+            if channel_id not in self.media_channels:
+                logger.info(f"1.5️⃣ Starting snoop channel for RTP capture on channel {channel_id}...")
+                try:
+                    snoop_channel = await self.ari.snoop_channel(
+                        channel_id=channel_id,
+                        app=self.ari.app_name,
+                        spy="both",
+                        whisper="none"
+                    )
+                    snoop_id = snoop_channel.get('id')
+                    self.media_channels[channel_id] = snoop_id
+                    logger.info(f"✅ Snoop channel started: {snoop_id} for channel {channel_id}")
+                except Exception as snoop_error:
+                    logger.error(f"Failed to start snoop channel: {snoop_error}", exc_info=True)
+                    logger.warning(f"RTP capture not available - ASR will not receive audio")
+            else:
+                logger.warning(f"Snoop channel already exists for {channel_id}, skipping creation")
             
             # Step 2: Create call record in database
             call_id = uuid.uuid4()
@@ -220,13 +236,19 @@ class AsteriskCallHandler:
         """Handle StasisEnd event - call left our application"""
         channel = event.get('channel', {})
         channel_id = channel.get('id')
+        channel_name = channel.get('name', '')
         
-        logger.info(f"Stasis end: {channel_id}")
+        logger.info(f"Stasis end: {channel_id} ({channel_name})")
         
-        # Stop voice processor
+        # ИСПРАВЛЕНО: Игнорируем StasisEnd от snoop-каналов
+        if channel_id and ('Snoop' in channel_name or 'snoop' in channel_name.lower()):
+            logger.debug(f"Ignoring StasisEnd from snoop channel: {channel_id}")
+            return
+        
+        # Stop voice processor (только для основного канала)
         await self.voice_manager.remove_processor(channel_id)
         
-        # Clean up media channel
+        # Clean up media channel (snoop)
         if channel_id in self.media_channels:
             media_channel_id = self.media_channels.pop(channel_id)
             try:

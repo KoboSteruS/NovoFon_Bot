@@ -354,13 +354,21 @@ class VoiceProcessor:
             
             logger.info(f"Sending audio to Asterisk: {media_uri} ({len(pcm16_data)} bytes PCM16, {file_size} bytes SLIN16)")
             logger.info(f"File path: {slin_path}")
+            logger.info(f"Playing on channel: {self.channel_id} (should be main channel, NOT snoop)")
+            
+            # ИСПРАВЛЕНО: Убеждаемся, что проигрываем на основном канале, а не на snoop
+            # Проверяем, что channel_id не является snoop-каналом
+            if 'Snoop' in self.channel_id or 'snoop' in self.channel_id.lower():
+                logger.error(f"❌ ERROR: Attempting to play on snoop channel: {self.channel_id}")
+                logger.error(f"This should never happen! Channel ID must be the main channel.")
+                raise ValueError(f"Cannot play on snoop channel: {self.channel_id}")
             
             try:
                 playback_info = await self.ari_client.play_media(
                     channel_id=self.channel_id,
                     media=media_uri
                 )
-                logger.info(f"✅ Audio playback started: {playback_info.get('id', 'unknown')}")
+                logger.info(f"✅ Audio playback started on channel {self.channel_id}: {playback_info.get('id', 'unknown')}")
             except Exception as play_error:
                 logger.error(f"Failed to play media: {play_error}", exc_info=True)
                 raise
