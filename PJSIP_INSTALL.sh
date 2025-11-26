@@ -1,0 +1,250 @@
+#!/bin/bash
+# Скрипт установки и настройки PJSIP 2.14.1 с WebSocket для NovoFon Bot
+
+set -e
+
+echo "=========================================="
+echo "Установка PJSIP 2.14.1 с WebSocket"
+echo "=========================================="
+
+# Часть 1. Установка зависимостей
+echo "📦 Часть 1: Установка зависимостей..."
+apt update
+apt install -y \
+  build-essential \
+  git \
+  libssl-dev \
+  libsrtp2-dev \
+  libasound2-dev \
+  libavcodec-dev \
+  libavutil-dev \
+  libswresample-dev \
+  libavformat-dev \
+  libopus-dev \
+  python3 python3-pip
+
+echo "✅ Зависимости установлены"
+
+# Часть 2. Скачивание PJSIP 2.14.1
+echo "📥 Часть 2: Скачивание PJSIP 2.14.1..."
+cd /usr/local/src
+
+if [ -d "pjproject" ]; then
+    echo "⚠️  Директория pjproject уже существует, обновляем..."
+    cd pjproject
+    git fetch origin
+    git checkout 2.14.1
+    git reset --hard 2.14.1
+else
+    git clone https://github.com/pjsip/pjproject.git
+    cd pjproject
+    git checkout 2.14.1
+fi
+
+echo "✅ PJSIP 2.14.1 скачан"
+
+# Часть 3. Конфигурация PJSIP с WebSocket
+echo "🔧 Часть 3: Конфигурация PJSIP с WebSocket..."
+cat > user.mak <<'EOF'
+PJ_CONFIGURE_OPTS = --enable-shared
+CFLAGS += -DPJ_HAS_SSL_SOCK=1
+CFLAGS += -DPJMEDIA_HAS_WEBRTC_AEC=0
+CFLAGS += -DPJSIP_HAS_WS_TRANSPORT=1
+EOF
+
+echo "✅ user.mak создан"
+
+# Конфигурируем
+echo "🔧 Конфигурирование PJSIP..."
+./configure --enable-shared
+
+echo "✅ Конфигурация завершена"
+
+# Часть 4. Компиляция PJSIP
+echo "🔨 Часть 4: Компиляция PJSIP (это может занять несколько минут)..."
+make dep
+make -j$(nproc)
+make install
+ldconfig
+
+echo "✅ PJSIP скомпилирован и установлен"
+
+# Часть 5. Проверка WebSocket транспорта
+echo "🔍 Часть 5: Проверка WebSocket транспорта..."
+if pjsua --help 2>&1 | grep -q "websocket"; then
+    echo "✅ WebSocket транспорт доступен в pjsua"
+    pjsua --help 2>&1 | grep -i websocket || true
+else
+    echo "⚠️  WebSocket транспорт не найден в справке pjsua"
+    echo "Проверяем версию pjsua..."
+    pjsua --version || true
+fi
+
+# Часть 6. Настройка Asterisk для WebSocket
+echo "🔧 Часть 6: Настройка Asterisk для WebSocket..."
+
+# Проверяем существование http.conf
+if [ -f "/etc/asterisk/http.conf" ]; then
+    echo "📝 Обновление /etc/asterisk/http.conf..."
+    
+    # Создаем backup
+    cp /etc/asterisk/http.conf /etc/asterisk/http.conf.backup.$(date +%Y%m%d_%H%M%S)
+    
+    # Обновляем http.conf
+    if ! grep -q "^enabled=yes" /etc/asterisk/http.conf; then
+        sed -i 's/^enabled=.*/enabled=yes/' /etc/asterisk/http.conf || echo "enabled=yes" >> /etc/asterisk/http.conf
+    fi
+    
+    if ! grep -q "^bindaddr=0.0.0.0" /etc/asterisk/http.conf; then
+        sed -i 's/^bindaddr=.*/bindaddr=0.0.0.0/' /etc/asterisk/http.conf || echo "bindaddr=0.0.0.0" >> /etc/asterisk/http.conf
+    fi
+    
+    if ! grep -q "^bindport=8088" /etc/asterisk/http.conf; then
+        sed -i 's/^bindport=.*/bindport=8088/' /etc/asterisk/http.conf || echo "bindport=8088" >> /etc/asterisk/http.conf
+    fi
+    
+    # Включаем WebSocket
+    if ! grep -q "^wsenabled=yes" /etc/asterisk/http.conf; then
+        echo "" >> /etc/asterisk/http.conf
+        echo "; WebSocket support" >> /etc/asterisk/http.conf
+        echo "wsenabled=yes" >> /etc/asterisk/http.conf
+        echo "wssenabled=yes" >> /etc/asterisk/http.conf
+    fi
+    
+    echo "✅ http.conf обновлен"
+else
+    echo "📝 Создание /etc/asterisk/http.conf..."
+    cat > /etc/asterisk/http.conf <<'EOF'
+[general]
+enabled=yes
+bindaddr=0.0.0.0
+bindport=8088
+
+; WebSocket support
+wsenabled=yes
+wssenabled=yes
+EOF
+    chown asterisk:asterisk /etc/asterisk/http.conf
+    chmod 644 /etc/asterisk/http.conf
+    echo "✅ http.conf создан"
+fi
+
+# Обновляем pjsip.conf для WebSocket транспорта
+echo "📝 Обновление /etc/asterisk/pjsip.conf..."
+if [ -f "/etc/asterisk/pjsip.conf" ]; then
+    # Создаем backup
+    cp /etc/asterisk/pjsip.conf /etc/asterisk/pjsip.conf.backup.$(date +%Y%m%d_%H%M%S)
+    
+    # Проверяем наличие transport-ws
+    if ! grep -q "^\[transport-ws\]" /etc/asterisk/pjsip.conf; then
+        echo "" >> /etc/asterisk/pjsip.conf
+        echo "; WebSocket transport (WS)" >> /etc/asterisk/pjsip.conf
+        echo "[transport-ws]" >> /etc/asterisk/pjsip.conf
+        echo "type=transport" >> /etc/asterisk/pjsip.conf
+        echo "protocol=ws" >> /etc/asterisk/pjsip.conf
+        echo "bind=0.0.0.0" >> /etc/asterisk/pjsip.conf
+        echo "" >> /etc/asterisk/pjsip.conf
+    fi
+    
+    # Проверяем наличие transport-wss (опционально, если есть сертификаты)
+    if ! grep -q "^\[transport-wss\]" /etc/asterisk/pjsip.conf; then
+        echo "; WebSocket Secure transport (WSS) - опционально" >> /etc/asterisk/pjsip.conf
+        echo "; [transport-wss]" >> /etc/asterisk/pjsip.conf
+        echo "; type=transport" >> /etc/asterisk/pjsip.conf
+        echo "; protocol=wss" >> /etc/asterisk/pjsip.conf
+        echo "; bind=0.0.0.0" >> /etc/asterisk/pjsip.conf
+        echo "; cert_file=/etc/asterisk/keys/asterisk.pem" >> /etc/asterisk/pjsip.conf
+        echo "; priv_key_file=/etc/asterisk/keys/asterisk.key" >> /etc/asterisk/pjsip.conf
+        echo "" >> /etc/asterisk/pjsip.conf
+    fi
+    
+    echo "✅ pjsip.conf обновлен"
+else
+    echo "⚠️  /etc/asterisk/pjsip.conf не найден, создаем базовую конфигурацию..."
+    cat > /etc/asterisk/pjsip.conf <<'EOF'
+[global]
+; Global PJSIP settings
+
+; WebSocket transport (WS)
+[transport-ws]
+type=transport
+protocol=ws
+bind=0.0.0.0
+
+; WebSocket Secure transport (WSS) - опционально
+; [transport-wss]
+; type=transport
+; protocol=wss
+; bind=0.0.0.0
+; cert_file=/etc/asterisk/keys/asterisk.pem
+; priv_key_file=/etc/asterisk/keys/asterisk.key
+EOF
+    chown asterisk:asterisk /etc/asterisk/pjsip.conf
+    chmod 644 /etc/asterisk/pjsip.conf
+    echo "✅ pjsip.conf создан"
+fi
+
+# Часть 7. Перезапуск Asterisk
+echo "🔄 Часть 7: Перезапуск Asterisk..."
+if systemctl is-active --quiet asterisk; then
+    systemctl restart asterisk
+    echo "✅ Asterisk перезапущен"
+    sleep 2
+else
+    echo "⚠️  Asterisk не запущен, запускаем..."
+    systemctl start asterisk || echo "⚠️  Не удалось запустить Asterisk"
+fi
+
+# Часть 8. Проверка установки
+echo "🔍 Часть 8: Проверка установки..."
+
+# Проверка pjsua
+if command -v pjsua &> /dev/null; then
+    echo "✅ pjsua установлен: $(pjsua --version 2>&1 | head -1)"
+else
+    echo "❌ pjsua не найден!"
+fi
+
+# Проверка порта 8088
+echo "🔍 Проверка WebSocket порта 8088..."
+if netstat -tulpn 2>/dev/null | grep -q ":8088"; then
+    echo "✅ Asterisk слушает на порту 8088"
+    netstat -tulpn | grep 8088
+else
+    echo "⚠️  Порт 8088 не открыт"
+    echo "Проверяем логи Asterisk..."
+    journalctl -u asterisk -n 20 --no-pager | tail -10 || true
+fi
+
+# Проверка WebSocket транспорта в Asterisk
+echo "🔍 Проверка WebSocket транспорта в Asterisk..."
+if asterisk -rx "pjsip show transports" 2>/dev/null | grep -q "ws\|wss"; then
+    echo "✅ WebSocket транспорт зарегистрирован в Asterisk"
+    asterisk -rx "pjsip show transports" 2>/dev/null | grep -E "ws|wss" || true
+else
+    echo "⚠️  WebSocket транспорт не найден в Asterisk"
+    echo "Проверяем все транспорты:"
+    asterisk -rx "pjsip show transports" 2>/dev/null || true
+fi
+
+echo ""
+echo "=========================================="
+echo "✅ PJSIP установлен и настроен!"
+echo "=========================================="
+echo ""
+echo "Проверка работы:"
+echo "  pjsua --version"
+echo "  pjsua --help | grep websocket"
+echo "  sudo netstat -tulpn | grep 8088"
+echo "  sudo asterisk -rx 'pjsip show transports'"
+echo ""
+echo "Тестирование WebSocket:"
+echo "  pjsua --log-level=5 --websocket ws://127.0.0.1:5066 sip:test@localhost"
+echo ""
+echo "Проверка внешним клиентом:"
+echo "  wscat -c ws://server:8088/ws"
+echo ""
+echo "Логи Asterisk:"
+echo "  sudo journalctl -u asterisk -f"
+echo ""
+
