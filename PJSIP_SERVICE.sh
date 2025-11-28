@@ -56,3 +56,5 @@ echo "  sudo systemctl status pjsua"
 echo "  sudo journalctl -u pjsua -f"
 echo ""
 
+
+

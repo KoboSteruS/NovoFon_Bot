@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     asterisk_ari_url: str = "http://localhost:8088/ari"
     asterisk_ari_username: str = "asterisk"
     asterisk_ari_password: str = "asterisk"
-    asterisk_ari_app_name: str = "novofon_bot"
+    asterisk_ari_app_name: str = "elevenbot"  # ИСПРАВЛЕНО: соответствует extensions.conf
     
     # Redis
     redis_url: str = "redis://localhost:6379/0"

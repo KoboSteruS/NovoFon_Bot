@@ -346,3 +346,5 @@ import aiohttp     # для ARI REST API
 
 **Все работает через стандартный Asterisk ARI/Stasis!**
 
+
+

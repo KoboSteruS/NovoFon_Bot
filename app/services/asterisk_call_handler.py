@@ -94,6 +94,8 @@ class AsteriskCallHandler:
         
         # ИСПРАВЛЕНО: Игнорируем StasisStart от snoop-каналов
         # Snoop-каналы тоже попадают в Stasis, но мы их не обрабатываем
+        # PJSIP snoop channels: "PJSIP/novofon-trunk-00000001;2" или "Snoop/PJSIP/..."
+        # chan_sip snoop channels: "Snoop/SIP/novofon-ip-00000000-00000000"
         channel_name = channel.get('name', '')
         if channel_id and ('Snoop' in channel_name or 'snoop' in channel_name.lower()):
             logger.debug(f"Ignoring StasisStart from snoop channel: {channel_id} ({channel_name})")
@@ -244,8 +246,10 @@ class AsteriskCallHandler:
         logger.info(f"Stasis end: {channel_id} ({channel_name})")
         
         # ИСПРАВЛЕНО: Игнорируем StasisEnd от snoop-каналов
+        # PJSIP snoop channels: "PJSIP/novofon-trunk-00000001;2" или "Snoop/PJSIP/..."
+        # chan_sip snoop channels: "Snoop/SIP/novofon-ip-00000000-00000000"
         if channel_id and ('Snoop' in channel_name or 'snoop' in channel_name.lower()):
-            logger.debug(f"Ignoring StasisEnd from snoop channel: {channel_id}")
+            logger.debug(f"Ignoring StasisEnd from snoop channel: {channel_id} ({channel_name})")
             return
         
         # Stop voice processor (только для основного канала)
@@ -330,12 +334,27 @@ class AsteriskCallHandler:
             
             if not original_channel_id:
                 # If not found in media_channels, try to extract from channel name
-                # Snoop channels might have names like "SIP/xxx-00000001;2"
-                logger.warning(f"⚠️ Media received from channel {media_channel_id}, but not found in media_channels mapping")
+                # PJSIP snoop channels: "PJSIP/novofon-trunk-00000001;2"
+                # chan_sip snoop channels: "SIP/xxx-00000001;2" или "Snoop/SIP/..."
+                channel_name = channel.get('name', 'unknown')
+                logger.warning(f"⚠️ Media received from channel {media_channel_id} ({channel_name}), but not found in media_channels mapping")
                 logger.warning(f"Current media_channels: {self.media_channels}")
-                logger.warning(f"Channel name: {channel.get('name', 'unknown')}")
-                # For now, skip if we can't match
-                return
+                
+                # Попытка извлечь original channel из имени snoop channel
+                # PJSIP: "PJSIP/novofon-trunk-00000001;2" -> ищем "PJSIP/novofon-trunk-00000001"
+                # chan_sip: "Snoop/SIP/novofon-ip-00000000-00000000" -> ищем "SIP/novofon-ip-00000000"
+                if ';' in channel_name:
+                    # PJSIP format: "PJSIP/endpoint-XXXXX;Y" -> "PJSIP/endpoint-XXXXX"
+                    base_name = channel_name.split(';')[0]
+                    for ch_id in self.active_channels.keys():
+                        if ch_id.startswith(base_name.split('/')[-1].split('-')[0]):
+                            original_channel_id = ch_id
+                            logger.info(f"✅ Matched snoop channel {media_channel_id} to original channel {original_channel_id} by name pattern")
+                            break
+                
+                if not original_channel_id:
+                    logger.warning(f"⚠️ Could not match snoop channel to original channel, skipping media event")
+                    return
             
             # Get media payload
             # Asterisk ARI ChannelMediaReceived event structure:
