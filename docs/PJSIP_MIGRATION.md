@@ -195,3 +195,4 @@ rtp set debug on
 3. Используйте `sip.conf` вместо `pjsip.conf`
 4. Перезагрузите Asterisk
 
+

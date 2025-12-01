@@ -228,3 +228,4 @@ curl -u username:password http://asterisk:8088/ari/events?app=novofon_bot
 
 
 
+
